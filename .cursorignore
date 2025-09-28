@@ -1,0 +1,50 @@
+# OS/Editor
+.DS_Store
+.idea/
+.vscode/
+
+# Node/TS/JS
+node_modules/
+dist/
+build/
+out/
+.cache/
+coverage/
+.turbo/
+.pnpm-store/
+.next/
+.nuxt/
+
+# Rust
+target/
+
+# Go
+bin/
+vendor/
+
+# Python
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+
+# Java/Gradle
+.gradle/
+*.class
+
+# Solana/Anchor
+.anchor/
+keys/
+
+# Docker/Images/Archives
+*.tar
+*.zip
+*.gz
+*.tgz
+*.log
+
+# Docs (large evidence artifacts)
+docs/evidence/
+
+
