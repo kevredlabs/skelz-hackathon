@@ -1,0 +1,31 @@
+# General
+.DS_Store
+node_modules/
+dist/
+build/
+.cache/
+coverage/
+*.log
+
+# Env & secrets
+.env
+.env.*.local
+
+# Rust
+target/
+
+# Go
+bin/
+
+# Solana
+.anchor/
+keys/
+
+# Docker
+*.tar
+
+# Editor/IDE
+.idea/
+.vscode/
+
+

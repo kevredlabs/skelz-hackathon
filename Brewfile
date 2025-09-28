@@ -1,0 +1,13 @@
+tap "homebrew/cask"
+brew "git"
+brew "node@20"
+brew "pnpm"
+brew "go"
+brew "golangci-lint"
+brew "rustup-init"
+brew "solana"
+brew "cosign"
+brew "kind"
+brew "kubectl"
+brew "pre-commit"
+

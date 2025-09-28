@@ -1,0 +1,13 @@
+# Default owners
+* @your-github-handle
+
+# Components
+/contracts/ @your-github-handle
+/cli/ @your-github-handle
+/admission-controller/ @your-github-handle
+/sdk/ @your-github-handle
+/infra/ @your-github-handle
+/docs/ @your-github-handle
+/examples/ @your-github-handle
+/scripts/ @your-github-handle
+/test/ @your-github-handle
