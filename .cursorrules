@@ -1,0 +1,59 @@
+Soldock – Cursor Rules
+
+Scope and intent
+- This repo is for a hackathon MVP: decentralized container image registry on Solana.
+- Optimize for fast, minimal, demo-ready edits with clear separation of components.
+
+Authoritative context (read first)
+- README.md (pitch, MVP scope, tree)
+- docs/diagram.md (workflow CI → Cosign → Solana → K8s)
+- docs/adrs/0001-architecture-et-choix-tech.md (key choices)
+
+Languages and ownership
+- contracts/: Rust (Anchor or plain Solana program)
+- cli/: TypeScript (Node) or Rust (pick one per task, prefer TS first for speed)
+- admission-controller/: Go (K8s validating webhook)
+- sdk/: ts and rust stubs (keep thin)
+
+Coding style
+- Prefer clarity over cleverness, small readable functions, strong typing when applicable.
+- Follow Conventional Commits and keep diffs minimal/targeted (no drive-by refactors).
+- Maintain existing formatting per .editorconfig; do not reformat unrelated code.
+
+Edits policy
+- Default to minimal edits that achieve the goal; avoid adding infra unless explicitly requested.
+- When adding files, also update the nearest README if behavior/usage changes.
+- Do not introduce secrets; use .env.example and document required env vars.
+- Before changing CI or infra, ask or gate behind a clearly labeled optional step.
+
+Commands and tooling
+- Prefer Makefile targets: setup, lint, test, build, e2e. If missing, add narrowly.
+- Use pre-commit hooks if present; do not require them to run.
+- Use scripts/demo.sh as a placeholder for E2E unless asked to implement.
+
+Tests & lint
+- Run make lint and make test where relevant. If not applicable, keep changes buildable and lint-clean.
+- If introducing new modules, include at least smoke tests or usage examples.
+
+Security & supply chain
+- Never commit private keys or tokens. Point to system keypaths (Cosign, Solana) via env.
+- For Cosign, prefer keyless or local keypaths referenced from env variables.
+
+CI rules
+- .github/workflows/ci.yml is minimal by design. Do not expand it without an explicit request.
+
+Documentation
+- Keep README concise. Put diagrams/specs in docs/.
+- If adding public APIs (CLI or SDK), document commands/functions briefly.
+
+Cursor behavior preferences
+- Use small, focused edits. Reference exact files and functions.
+- If context is missing, ask one clarifying question, then proceed with assumptions stated.
+- Avoid massive code dumps. Create files with the minimal scaffolding needed to run.
+- Respect .cursorignore; do not surface ignored content.
+
+Acceptance for new work
+- Code compiles/builds (where applicable), passes lint, and integrates with existing Makefile targets.
+- Includes minimal docs update (README or docs/), no secrets, and a short usage note if user-facing.
+
+
