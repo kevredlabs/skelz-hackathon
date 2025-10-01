@@ -69,7 +69,7 @@ jobs:
           cosign sign --yes ${images}
           echo "Verifying images: ${images}"
           cosign verify ${images} \
-            --certificate-identity=https://github.com/${{ github.repository }}/.github/workflows/container-signing.yml@refs/heads/main \
+            --certificate-identity=https://github.com/${{ github.repository }}/.github/workflows/container-signing.yml@${{ github.ref }} \
             --certificate-oidc-issuer=https://token.actions.githubusercontent.com
 
       - name: Output image information
