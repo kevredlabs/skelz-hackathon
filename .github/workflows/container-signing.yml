@@ -71,12 +71,3 @@ jobs:
           cosign verify ${images} \
             --certificate-identity=https://github.com/${{ github.repository }}/.github/workflows/container-signing.yml@${{ github.ref }} \
             --certificate-oidc-issuer=https://token.actions.githubusercontent.com
-
-      - name: Output image information
-        run: |
-          echo "Image digest: ${{ steps.build-and-push.outputs.digest }}"
-          echo "Image tags: ${{ steps.docker_meta.outputs.tags }}"
-          echo "Images are now available at:"
-          for tag in ${{ steps.docker_meta.outputs.tags }}; do
-            echo "  - ${tag}"
-          done
