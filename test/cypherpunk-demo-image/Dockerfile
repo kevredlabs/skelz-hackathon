@@ -7,4 +7,4 @@ LABEL org.opencontainers.image.description="Demo container image for Soldock - d
 LABEL org.opencontainers.image.vendor="Kevred Labs"
 LABEL org.opencontainers.image.source="https://github.com/kevredlabs/soldock"
 
-CMD echo "Hello SuperteamFR !"
+CMD echo "Hello SuperteamFR ! "
