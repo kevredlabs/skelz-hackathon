@@ -1,0 +1,82 @@
+name: legacy-signing-and-verifying
+
+on:
+  push:
+    branches: [ '*' ]
+    paths:
+      - 'test/cypherpunk-demo-image/**'
+      - '.github/workflows/container-signing.yml'
+
+jobs:
+  build-and-sign-image:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # needed for signing the images with GitHub OIDC Token
+
+    name: build-and-sign-image
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2.5.0
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v2.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: docker_meta
+        uses: docker/metadata-action@v4.4.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/soldock
+          tags: |
+            type=ref,event=branch
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and Push container images
+        uses: docker/build-push-action@v4.0.0
+        id: build-and-push
+        with:
+          context: ./test/cypherpunk-demo-image
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.docker_meta.outputs.tags }}
+          labels: ${{ steps.docker_meta.outputs.labels }}
+
+
+      - name: Sign and verify the images with GitHub OIDC Token
+        env:
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+          TAGS: ${{ steps.docker_meta.outputs.tags }}
+        run: |
+          images=""
+          for tag in ${TAGS}; do
+            images+="${tag}@${DIGEST} "
+          done
+          echo "Signing images: ${images}"
+          cosign sign --yes ${images}
+          echo "Verifying images: ${images}"
+          cosign verify ${images} \
+            --certificate-identity=https://github.com/${{ github.repository }}/.github/workflows/container-signing.yml@refs/heads/main \
+            --certificate-oidc-issuer=https://token.actions.githubusercontent.com
+
+      - name: Output image information
+        run: |
+          echo "Image digest: ${{ steps.build-and-push.outputs.digest }}"
+          echo "Image tags: ${{ steps.docker_meta.outputs.tags }}"
+          echo "Images are now available at:"
+          for tag in ${{ steps.docker_meta.outputs.tags }}; do
+            echo "  - ${tag}"
+          done

@@ -47,6 +47,16 @@ make build
 make e2e   # démo end-to-end (à venir)
 ```
 
+## CI/CD et signature d'images
+
+Le projet inclut un workflow GitHub Actions qui :
+- Build automatiquement l'image demo sur chaque push vers `main`
+- Signe l'image avec Cosign et GitHub OIDC Token
+- Publie l'image signée sur GitHub Container Registry (ghcr.io)
+- Supporte l'architecture amd64 (compatible macOS)
+
+L'image est disponible à : `ghcr.io/kevredlabs/soldock:latest`
+
 ## Licence
 
 MIT — voir `LICENSE`.
