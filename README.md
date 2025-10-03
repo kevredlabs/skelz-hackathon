@@ -1,64 +1,63 @@
-Skelz – Registry décentralisé d'images container sur Solana
+Skelz – Bringing trust to the software supply chain: sign, verify, and secure container images on Solana.
 
 ## Pitch
 
-- **Problème**: La supply chain logicielle est fragile (dépendances/images compromises, registries centralisés corruptibles/censurables). Comment garantir qu’une image déployée est bien celle construite et validée ?
-- **Solution**: Un registre on-chain (Solana) des digests et signatures d’images, attestations (SBOM, provenance) sur IPFS/Arweave, politiques immuables, vérification automatique côté K8s (Admission Controller).
-- **Workflow**: Build CI → Cosign signe → Publication on-chain (digest, signatures, CIDs IPFS) → Admission Controller compare digest/signatures/policies → ALLOW/DENY.
-- **Bénéfices**: Sécurité, transparence, conformité, interopérabilité (Sigstore/Cosign), résistance à la censure.
+- **Problem**: The software supply chain is fragile (compromised dependencies/images, centralized registries that can be corrupted or censored). How can we guarantee that the deployed image is exactly the one that was built and approved?
+- **Solution**: An on-chain (Solana) registry of image digests and signatures; attestations (SBOM, provenance) stored on IPFS/Arweave; immutable policies; automatic verification in Kubernetes via an Admission Controller.
+- **Workflow**: CI builds → Cosign signs → On-chain publication (digest, signatures, IPFS CIDs) → Admission Controller compares digest/signatures/policies → ALLOW/DENY.
+- **Benefits**: Security, transparency, compliance, interoperability (Sigstore/Cosign), censorship resistance.
 
-## Objectif MVP (hackathon)
+## MVP scope (hackathon)
 
-- Smart contract Solana (registre des digests, signatures, CIDs, politiques)
-- CLI `publish`/`verify`
-- K8s Admission Controller (Go) pour ALLOW/DENY
-- Démo E2E (KinD): build → sign → publish → deploy
+- Solana smart contract (registry of digests, signatures, CIDs, policies)
+- CLI `publish`/`verify` (Rust)
+- K8s Admission Controller (Rust) for ALLOW/DENY
+- E2E demo (KinD): build → sign → publish → deploy
 
-## Arborescence prévue
+## Planned structure
 
 ```
-contracts/              # Programme Solana (Anchor/Rust)
-cli/                    # CLI publish/verify (TS ou Rust)
-admission-controller/   # Webhook K8s (Go)
-sdk/                    # Clients partagés (ts/ rust)
-infra/                  # Manifests K8s, Helm, KinD
-docs/                   # Docs, schémas, ADRs
-examples/               # Flux E2E
-scripts/                # Helpers build/sign/publish/e2e
-test/                   # Tests intégration/e2e
+contracts/              # Solana program (Anchor/Rust)
+cli/                    # CLI publish/verify (Rust)
+admission-controller/   # K8s webhook (Rust)
+sdk/                    # Shared clients (Rust)
+infra/                  # K8s manifests, Helm, KinD
+docs/                   # Docs, diagrams, ADRs
+examples/               # E2E flows
+test/                   # Integration/E2E tests
 ```
 
 ## Conventions
 
-- Branches courtes `feat/*`, `fix/*`, merges sur `main` (protégée)
-- Commits: Conventional Commits (`feat:`, `fix:`, `chore:`…)
-- Formatage/lints: Rust (`rustfmt`/`clippy`), Go (`gofmt`/`golangci-lint`), TS (`eslint`/`prettier`)
+- Short-lived branches `feat/*`, `fix/*`, merges into `main` (protected)
+- Commits: Conventional Commits (`feat:`, `fix:`, `chore:` …)
+- Formatting/lints: Rust (`rustfmt` / `clippy`)
 - Hooks: `pre-commit`
 
-## Prérequis (dev)
+## Prerequisites (dev)
 
-- Docker, Cosign, Node 20+, pnpm, Go 1.22+, Rust/Cargo, Solana CLI, Kind/kubectl
+- Docker, Cosign, Rust/Cargo, Solana CLI, Kind/kubectl
 
-## Démarrage rapide
+## Quick start
 
 ```
 make setup
 make build
-make e2e   # démo end-to-end (à venir)
+make e2e   # end-to-end demo (coming soon)
 ```
 
-## CI/CD et signature d'images
+## CI/CD and image signing
 
-Le projet inclut un workflow GitHub Actions qui :
-- Build automatiquement l'image demo sur chaque push vers `main`
-- Signe l'image avec Cosign et GitHub OIDC Token
-- Publie l'image signée sur GitHub Container Registry (ghcr.io)
-- Supporte l'architecture amd64 (compatible macOS)
+The project includes a GitHub Actions workflow that:
+- Automatically builds the demo image on each push to `main`
+- Signs the image with Cosign and a GitHub OIDC token
+- Publishes the signed image to GitHub Container Registry (ghcr.io)
+- Supports the amd64 architecture (macOS compatible)
 
-L'image est disponible à : `ghcr.io/kevredlabs/skelz:latest`
+The image is available at: `ghcr.io/kevredlabs/skelz:latest`
 
-## Licence
+## License
 
-MIT — voir `LICENSE`.
+MIT — see `LICENSE`.
 
 

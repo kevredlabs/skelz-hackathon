@@ -7,20 +7,14 @@ setup:
 lint:
 	@echo "Running linters..."
 	@if command -v cargo >/dev/null 2>&1; then cargo fmt --all -- --check; cargo clippy --all-targets --all-features -D warnings || true; fi
-	@if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run || true; fi
-	@if command -v pnpm >/dev/null 2>&1; then pnpm -C cli lint || true; fi
 
 test:
 	@echo "Running tests..."
 	@if command -v cargo >/dev/null 2>&1; then cargo test --all --quiet || true; fi
-	@if command -v go >/dev/null 2>&1; then go test ./... || true; fi
-	@if command -v pnpm >/dev/null 2>&1; then pnpm -C cli test || true; fi
 
 build:
 	@echo "Building..."
 	@if command -v cargo >/dev/null 2>&1; then cargo build --all --release || true; fi
-	@if command -v go >/dev/null 2>&1; then mkdir -p bin && go build -o bin/skelz-webhook ./admission-controller || true; fi
-	@if command -v pnpm >/dev/null 2>&1; then pnpm -C cli build || true; fi
 
 devnet-up:
 	@echo "Starting local Solana devnet (test-validator)..."

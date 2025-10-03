@@ -15,4 +15,4 @@ Garantir l'intégrité des images déployées nécessite un registre de confianc
 
 - Transparence et immutabilité
 - Dépendance à l'infra blockchain et IPFS
-- Tooling multi-langages (Rust, Go, TS)
+- Tooling Rust-first (langage unique pour les composants)
