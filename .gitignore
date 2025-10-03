@@ -11,6 +11,12 @@ coverage/
 .env
 .env.*.local
 
+# Cosign keys (security sensitive)
+cosign.key
+cosign.pub
+*.key
+*.pub
+
 # Rust
 target/
 
