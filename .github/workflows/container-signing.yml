@@ -56,18 +56,14 @@ jobs:
           labels: ${{ steps.docker_meta.outputs.labels }}
 
 
-      - name: Sign and verify the images with GitHub OIDC Token
+      - name: Sign and verify the image digest with GitHub OIDC Token
         env:
           DIGEST: ${{ steps.build-and-push.outputs.digest }}
-          TAGS: ${{ steps.docker_meta.outputs.tags }}
         run: |
-          images=""
-          for tag in ${TAGS}; do
-            images+="${tag}@${DIGEST} "
-          done
-          echo "Signing images: ${images}"
-          cosign sign --yes ${images}
-          echo "Verifying images: ${images}"
-          cosign verify ${images} \
+          IMAGE_DIGEST="ghcr.io/${{ github.repository_owner }}/soldock@${DIGEST}"
+          echo "Signing image digest: ${IMAGE_DIGEST}"
+          cosign sign --yes ${IMAGE_DIGEST}
+          echo "Verifying image digest: ${IMAGE_DIGEST}"
+          cosign verify ${IMAGE_DIGEST} \
             --certificate-identity=https://github.com/${{ github.repository }}/.github/workflows/container-signing.yml@${{ github.ref }} \
             --certificate-oidc-issuer=https://token.actions.githubusercontent.com
