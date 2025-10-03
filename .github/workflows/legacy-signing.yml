@@ -39,7 +39,7 @@ jobs:
       - id: docker_meta
         uses: docker/metadata-action@v4.4.0
         with:
-          images: ghcr.io/${{ github.repository_owner }}/soldock
+          images: ghcr.io/${{ github.repository_owner }}/skelz
           tags: |
             type=ref,event=branch
             type=sha,format=long
@@ -60,7 +60,7 @@ jobs:
         env:
           DIGEST: ${{ steps.build-and-push.outputs.digest }}
         run: |
-          IMAGE_DIGEST="ghcr.io/${{ github.repository_owner }}/soldock@${DIGEST}"
+          IMAGE_DIGEST="ghcr.io/${{ github.repository_owner }}/skelz@${DIGEST}"
           echo "Signing image digest: ${IMAGE_DIGEST}"
           cosign sign --yes ${IMAGE_DIGEST}
           echo "Verifying image digest: ${IMAGE_DIGEST}"

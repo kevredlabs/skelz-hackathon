@@ -1,4 +1,4 @@
-Soldock – Cursor Rules
+Skelz – Cursor Rules
 
 Scope and intent
 - This repo is for a hackathon MVP: decentralized container image registry on Solana.
@@ -11,14 +11,21 @@ Authoritative context (read first)
 
 Languages and ownership
 - contracts/: Rust (Anchor or plain Solana program)
-- cli/: TypeScript (Node) or Rust (pick one per task, prefer TS first for speed)
-- admission-controller/: Go (K8s validating webhook)
-- sdk/: ts and rust stubs (keep thin)
+- cli/: Rust (CLI tool for container operations)
+- admission-controller/: Rust (K8s validating webhook using kube-rs)
+- sdk/: Rust only (keep thin, focus on core functionality)
+
+Rust-first approach
+- Single language for MVP: faster development, easier maintenance
+- Use tokio for async runtime across all components
+- Leverage existing Rust ecosystem: solana-sdk, anchor, kube-rs, clap
+- Shared crates in workspace for common functionality
 
 Coding style
 - Prefer clarity over cleverness, small readable functions, strong typing when applicable.
 - Follow Conventional Commits and keep diffs minimal/targeted (no drive-by refactors).
 - Maintain existing formatting per .editorconfig; do not reformat unrelated code.
+- Code, comments, and documentation must be in English (even if discussion is in French).
 
 Edits policy
 - Default to minimal edits that achieve the goal; avoid adding infra unless explicitly requested.
@@ -39,9 +46,6 @@ Security & supply chain
 - Never commit private keys or tokens. Point to system keypaths (Cosign, Solana) via env.
 - For Cosign, prefer keyless or local keypaths referenced from env variables.
 
-CI rules
-- .github/workflows/ci.yml is minimal by design. Do not expand it without an explicit request.
-
 Documentation
 - Keep README concise. Put diagrams/specs in docs/.
 - If adding public APIs (CLI or SDK), document commands/functions briefly.
@@ -55,5 +59,3 @@ Cursor behavior preferences
 Acceptance for new work
 - Code compiles/builds (where applicable), passes lint, and integrates with existing Makefile targets.
 - Includes minimal docs update (README or docs/), no secrets, and a short usage note if user-facing.
-
-

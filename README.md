@@ -1,4 +1,4 @@
-Soldock – Registry décentralisé d'images container sur Solana
+Skelz – Registry décentralisé d'images container sur Solana
 
 ## Pitch
 
@@ -55,7 +55,7 @@ Le projet inclut un workflow GitHub Actions qui :
 - Publie l'image signée sur GitHub Container Registry (ghcr.io)
 - Supporte l'architecture amd64 (compatible macOS)
 
-L'image est disponible à : `ghcr.io/kevredlabs/soldock:latest`
+L'image est disponible à : `ghcr.io/kevredlabs/skelz:latest`
 
 ## Licence
 

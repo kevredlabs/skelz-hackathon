@@ -19,7 +19,7 @@ test:
 build:
 	@echo "Building..."
 	@if command -v cargo >/dev/null 2>&1; then cargo build --all --release || true; fi
-	@if command -v go >/dev/null 2>&1; then mkdir -p bin && go build -o bin/soldock-webhook ./admission-controller || true; fi
+	@if command -v go >/dev/null 2>&1; then mkdir -p bin && go build -o bin/skelz-webhook ./admission-controller || true; fi
 	@if command -v pnpm >/dev/null 2>&1; then pnpm -C cli build || true; fi
 
 devnet-up:
