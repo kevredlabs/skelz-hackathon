@@ -46,6 +46,10 @@ make build
 make e2e   # end-to-end demo (coming soon)
 ```
 
+### CLI
+
+See `cli/README.md` for the `skelz` CLI usage (`config`, `sign`, `verify`).
+
 ## CI/CD and image signing
 
 The project includes a GitHub Actions workflow that:
