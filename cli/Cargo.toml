@@ -1,9 +1,9 @@
 [package]
 name = "skelz"
-edition.workspace = true
-version.workspace = true
-license.workspace = true
-repository.workspace = true
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+repository = "https://github.com/kevredlabs/skelz-hackathon"
 
 [lib]
 name = "skelz"
@@ -12,13 +12,12 @@ path = "src/lib.rs"
 [[bin]]
 name = "skelz"
 path = "src/main.rs"
-
-'trace = true
 [dependencies]
 anyhow = "1.0"
 thiserror = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 directories = "5.0"
+dirs-next = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 solana-client = "1.18"

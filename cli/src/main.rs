@@ -24,6 +24,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Manage configuration
+    #[command(subcommand)]
     Config(ConfigCommand),
     /// Publish a text memo transaction on Solana
     Sign(SignCmd),
@@ -62,8 +63,8 @@ struct ConfigInitCmd {
 
 #[derive(Debug, Args)]
 struct ConfigGetCmd {
-    /// Config key to read (cluster|rpc_url|keypair_path|commitment)
-    key: String,
+    /// Optional config key to read (cluster|rpc_url|keypair_path|commitment). If omitted, prints full config.
+    key: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -121,6 +122,7 @@ fn main() -> Result<()> {
 
                 let output_path = cmd
                     .output
+                    .as_deref()
                     .map(expand_tilde)
                     .unwrap_or_else(default_config_file_path);
 
@@ -138,10 +140,15 @@ fn main() -> Result<()> {
                 let cfg = skelz::read_config_file().or_else(|_| {
                     let cfg = SkelzConfig::default();
                     save_default_config(&cfg).ok();
-                    Ok(cfg)
+                    Ok::<SkelzConfig, anyhow::Error>(cfg)
                 })?;
-                let value = get_config_value(&cfg, &cmd.key)?;
-                println!("{}", value);
+                if let Some(key) = cmd.key.as_deref() {
+                    let value = get_config_value(&cfg, key)?;
+                    println!("{}", value);
+                } else {
+                    let toml_string = toml::to_string_pretty(&cfg)?;
+                    println!("{}", toml_string);
+                }
                 Ok(())
             }
             ConfigCommand::Set(cmd) => {

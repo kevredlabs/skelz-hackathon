@@ -40,10 +40,12 @@ test/                   # Integration/E2E tests
 
 ## Quick start
 
+Run all commands from inside `cli/` (the Makefile lives there):
 ```
+cd cli
 make setup
 make build
-make e2e   # end-to-end demo (coming soon)
+make test
 ```
 
 ### CLI

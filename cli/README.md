@@ -2,23 +2,38 @@ Skelz CLI
 
 Hackathon-ready CLI with three commands: `config`, `sign`, `verify`.
 
+## Makefile
+
+This directory ships its own `Makefile`. Run commands from here:
+
+- `make build`
+- `make test`
+- `make lint`
+
 ## Build & install
 
 ```
-# Build entire workspace
-cargo build --all
-
-# Build only the CLI
-cargo build -p skelz
-# or
-cargo build --manifest-path cli/Cargo.toml
+# With Makefile (recommended)
+make build
+make test
+make lint
 
 # Run
-cargo run -p skelz -- --help
+cargo build --release
+cargo run -- --help
 
 # Install locally (puts `skelz` in ~/.cargo/bin)
-cargo install --path cli
+cargo install --path .
 skelz --help
+```
+
+Toolchain:
+
+- CLI pins Rust to `stable` via `cli/rust-toolchain.toml`.
+- If needed, update toolchain with:
+```
+rustup update stable
+rustup default stable
 ```
 
 ## Global flags
@@ -37,7 +52,7 @@ skelz config <COMMAND>
 
 Subcommands:
 - `init`: generate a config file
-- `get`: get a config value
+- `get`: get a config value or print full config
 - `set`: set a config value
 
 Keys:
@@ -59,6 +74,9 @@ skelz config set rpc_url https://api.devnet.solana.com
 
 # Set cluster (will not auto-update rpc_url unless you pass --rpc-url at init)
 skelz config set cluster devnet
+
+# Print full config (TOML)
+skelz config get
 ```
 
 ### sign
@@ -95,9 +113,9 @@ Placeholder (no-op for now).
 
 ## Environment variables
 - `SOLANA_RPC_URL`: RPC endpoint
-- `SOLANA_KEYPAIR`: path to fee payer keypair (default: `~/.config/solana/id.json`)
+- `SOLANA_KEYPAIR`: path to fee payer keypair (default: `~/.config/skelz/id.json`)
 
 ## Defaults
 - Config path: XDG `~/.config/skelz/config.toml`
 - Cluster default: `devnet` (`https://api.devnet.solana.com`)
-- Keypair default: `~/.config/solana/id.json`
+- Keypair default: `~/.config/skelz/id.json`
