@@ -1,4 +1,4 @@
-Skelz – Bringing trust to the software supply chain: sign, verify, and secure container images on Solana.
+# Skelz – Bringing trust to the software supply chain: sign, verify, and secure container images on Solana
 
 ## Pitch
 
@@ -16,7 +16,7 @@ Skelz – Bringing trust to the software supply chain: sign, verify, and secure 
 
 ## Planned structure
 
-```
+```text
 contracts/              # Solana program (Anchor/Rust)
 cli/                    # CLI publish/verify (Rust)
 admission-controller/   # K8s webhook (Rust)
@@ -41,7 +41,8 @@ test/                   # Integration/E2E tests
 ## Quick start
 
 Run all commands from inside `cli/` (the Makefile lives there):
-```
+
+```bash
 cd cli
 make setup
 make build
@@ -54,16 +55,24 @@ See `cli/README.md` for the `skelz` CLI usage (`config`, `sign`, `verify`).
 
 ## CI/CD and image signing
 
-The project includes a GitHub Actions workflow that:
-- Automatically builds the demo image on each push to `main`
-- Signs the image with Cosign and a GitHub OIDC token
-- Publishes the signed image to GitHub Container Registry (ghcr.io)
-- Supports the amd64 architecture (macOS compatible)
+The project includes two GitHub Actions workflows for container image signing:
 
-The image is available at: `ghcr.io/kevredlabs/skelz:latest`
+### Legacy Signing (OIDC-based)
+
+- `legacy-signing-and-verifying.yml`: Signs images using GitHub OIDC tokens
+- Automatically builds the demo image on each push
+- Signs with Cosign using GitHub's OIDC infrastructure
+- Publishes to GitHub Container Registry (ghcr.io)
+
+### Private Key Signing
+
+- `private-key-signing-and-verifying.yml`: Signs images using private keys
+- Provides more control over the signing process
+- Requires configuration of GitHub secrets (`COSIGN_PRIVATE_KEY`, `COSIGN_PASSWORD`)
+- See `docs/private-key-signing-setup.md` for detailed setup instructions
+
+Both workflows support the amd64 architecture and the image is available at: `ghcr.io/kevredlabs/skelz:latest`
 
 ## License
 
 MIT — see `LICENSE`.
-
-
