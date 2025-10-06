@@ -16,6 +16,10 @@ install:
 	@echo "Installing skelz binary locally..."
 	@if command -v cargo >/dev/null 2>&1; then cargo install --path . || true; else echo "Cargo not found"; fi
 
+build-install:
+	@echo "Building and installing skelz..."
+	@if command -v cargo >/dev/null 2>&1; then cargo build --release && cargo install --path . || true; else echo "Cargo not found"; fi
+
 publish:
 	@echo "Publishing digest/signatures on-chain (placeholder)"
 	@echo "Implement in cli/ once ready"
