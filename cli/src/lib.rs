@@ -32,6 +32,10 @@ pub struct SkelzConfig {
     pub rpc_url: String,
     pub keypair_path: PathBuf,
     pub commitment: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker_login: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker_pass: Option<String>,
 }
 
 /// Structure for the Solana memo containing image signature information
@@ -90,6 +94,8 @@ impl Default for SkelzConfig {
             rpc_url: default_cluster_rpc_url("devnet"),
             keypair_path: default_solana_keypair_path(),
             commitment: "confirmed".to_string(),
+            docker_login: None,
+            docker_pass: None,
         }
     }
 }
@@ -124,6 +130,21 @@ pub fn read_config_file() -> Result<SkelzConfig> {
     let cfg: SkelzConfig = toml::from_str(std::str::from_utf8(&bytes).context("utf8 config")?)
         .with_context(|| format!("parse TOML at {}", path.display()))?;
     Ok(cfg)
+}
+
+pub fn resolve_dockerhub_credentials(cfg: &SkelzConfig) -> Result<(String, String)> {
+    let env_login = std::env::var("DOCKERHUB_LOGIN").ok().filter(|v| !v.trim().is_empty());
+    let env_pass = std::env::var("DOCKERHUB_PASS").ok().filter(|v| !v.trim().is_empty());
+
+    let login = env_login.or_else(|| cfg.docker_login.clone());
+    let pass = env_pass.or_else(|| cfg.docker_pass.clone());
+
+    match (login, pass) {
+        (Some(l), Some(p)) => Ok((l, p)),
+        _ => Err(anyhow!(
+            "DockerHub credentials not found. Set DOCKERHUB_LOGIN/DOCKERHUB_PASS or set docker_login/docker_pass in config.toml"
+        )),
+    }
 }
 
 pub fn load_config_with_overrides(
@@ -224,6 +245,9 @@ pub fn get_config_value(cfg: &SkelzConfig, key: &str) -> Result<String> {
         "rpc_url" => Ok(cfg.rpc_url.clone()),
         "keypair_path" => Ok(cfg.keypair_path.display().to_string()),
         "commitment" => Ok(cfg.commitment.clone()),
+        "docker_login" => Ok(cfg.docker_login.clone().unwrap_or_default()),
+        // Do not print secrets in clear text
+        "docker_pass" => Ok("<redacted>".to_string()),
         _ => Err(SkelzError::UnknownConfigKey(key.to_string()).into()),
     }
 }
@@ -234,6 +258,8 @@ pub fn set_config_value(cfg: &mut SkelzConfig, key: &str, value: &str) -> Result
         "rpc_url" => cfg.rpc_url = value.to_string(),
         "keypair_path" => cfg.keypair_path = expand_tilde(Path::new(value)),
         "commitment" => cfg.commitment = value.to_string(),
+        "docker_login" => cfg.docker_login = Some(value.to_string()),
+        "docker_pass" => cfg.docker_pass = Some(value.to_string()),
         _ => return Err(SkelzError::UnknownConfigKey(key.to_string()).into()),
     }
     Ok(())
