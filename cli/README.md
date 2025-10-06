@@ -57,6 +57,7 @@ Subcommands:
 
 Keys:
 - `cluster`, `rpc_url`, `keypair_path`, `commitment`
+- `docker_login`, `docker_pass` (optional, only if you can't use env)
 
 Examples:
 ```
@@ -114,8 +115,39 @@ Placeholder (no-op for now).
 ## Environment variables
 - `SOLANA_RPC_URL`: RPC endpoint
 - `SOLANA_KEYPAIR`: path to fee payer keypair (default: `~/.config/skelz/id.json`)
+\- `DOCKERHUB_LOGIN`, `DOCKERHUB_PASS`: preferred source for Docker Hub creds
+
+Resolution order for Docker Hub credentials:
+1. Environment variables `DOCKERHUB_LOGIN` and `DOCKERHUB_PASS` (recommended)
+2. Fallback to config TOML keys `docker_login` and `docker_pass` if set
+
+Example TOML snippet (only if you can't use env):
+```
+# ... other keys ...
+docker_login = "my-user"
+docker_pass = "<personal-access-token>"
+```
 
 ## Defaults
 - Config path: XDG `~/.config/skelz/config.toml`
 - Cluster default: `devnet` (`https://api.devnet.solana.com`)
 - Keypair default: `~/.config/skelz/id.json`
+
+### registry
+Work with Docker registry credentials.
+
+Subcommands:
+- `login`: perform `docker login` using env/TOML credentials
+
+Env-first resolution:
+1. `DOCKERHUB_LOGIN`, `DOCKERHUB_PASS`
+2. Fallback to TOML `docker_login`, `docker_pass`
+
+Usage:
+```
+skelz registry login
+# or specify a different registry
+skelz registry login --registry ghcr.io
+# override username
+skelz registry login --username my-user
+```

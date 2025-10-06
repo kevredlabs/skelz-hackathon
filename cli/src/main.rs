@@ -6,8 +6,8 @@ use tracing_subscriber::EnvFilter;
 
 use skelz::{
     default_cluster_rpc_url, default_config_file_path, expand_tilde, get_config_value,
-    load_config_with_overrides, save_default_config, set_config_value, sign_memo, write_config_file,
-    SkelzConfig,
+    load_config_with_overrides, resolve_dockerhub_credentials, save_default_config, set_config_value,
+    sign_memo, write_config_file, SkelzConfig,
 };
 
 #[derive(Debug, Parser)]
@@ -30,6 +30,9 @@ enum Commands {
     Sign(SignCmd),
     /// Verify (placeholder)
     Verify(VerifyCmd),
+    /// Registry operations
+    #[command(subcommand)]
+    Registry(RegistryCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -40,6 +43,22 @@ enum ConfigCommand {
     Get(ConfigGetCmd),
     /// Set a config setting
     Set(ConfigSetCmd),
+}
+
+#[derive(Debug, Subcommand)]
+enum RegistryCommand {
+    /// Log into Docker registry (Docker Hub) using env/TOML creds
+    Login(RegistryLoginCmd),
+}
+
+#[derive(Debug, Args)]
+struct RegistryLoginCmd {
+    /// Registry hostname (default: index.docker.io)
+    #[arg(long = "registry", default_value = "index.docker.io")]
+    registry: String,
+    /// Username override (else resolved via env/TOML)
+    #[arg(long = "username")]
+    username: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -170,5 +189,37 @@ fn main() -> Result<()> {
             println!("verify: not implemented yet");
             Ok(())
         }
+        Commands::Registry(cmd) => match cmd {
+            RegistryCommand::Login(cmd) => {
+                let cfg = skelz::read_config_file().unwrap_or_default();
+                let (mut login, pass) = resolve_dockerhub_credentials(&cfg)?;
+                if let Some(user_override) = cmd.username.as_deref() {
+                    login = user_override.to_string();
+                }
+
+                // Non-interactive docker login: pass via stdin
+                let mut child = std::process::Command::new("docker")
+                    .arg("login")
+                    .arg(cmd.registry)
+                    .arg("-u")
+                    .arg(login)
+                    .arg("--password-stdin")
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::inherit())
+                    .stderr(std::process::Stdio::inherit())
+                    .spawn()?;
+
+                use std::io::Write as _;
+                if let Some(stdin) = child.stdin.as_mut() {
+                    stdin.write_all(pass.as_bytes())?;
+                }
+                let status = child.wait()?;
+                if !status.success() {
+                    anyhow::bail!("docker login failed with status {}", status);
+                }
+                println!("docker login: success");
+                Ok(())
+            }
+        },
     }
 }
