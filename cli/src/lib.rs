@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::hash::Hash;
@@ -71,7 +70,7 @@ pub fn read_config_file() -> Result<SkelzConfig> {
         return Err(SkelzError::ConfigNotFound(path.display().to_string()).into());
     }
     let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-    let cfg: SkelzConfig = toml::from_slice(&bytes)
+    let cfg: SkelzConfig = toml::from_str(std::str::from_utf8(&bytes).context("utf8 config")?)
         .with_context(|| format!("parse TOML at {}", path.display()))?;
     Ok(cfg)
 }
@@ -88,7 +87,7 @@ pub fn load_config_with_overrides(
             cfg.rpc_url = env_rpc;
         }
     }
-    if let Some(kp) = keypair_path.map(expand_tilde) {
+    if let Some(kp) = keypair_path.as_deref().map(expand_tilde) {
         cfg.keypair_path = kp;
     } else if let Ok(env_kp) = std::env::var("SOLANA_KEYPAIR") {
         if !env_kp.trim().is_empty() {
@@ -101,7 +100,7 @@ pub fn load_config_with_overrides(
 pub fn sign_memo(message: &str, cfg: &SkelzConfig) -> Result<String> {
     let rpc_client = RpcClient::new(cfg.rpc_url.clone());
     let payer = read_keypair_file(&cfg.keypair_path)
-        .with_context(|| format!("read keypair at {}", cfg.keypair_path.display()))?;
+        .map_err(|e| anyhow!("read keypair at {}: {}", cfg.keypair_path.display(), e))?;
 
     let recent_blockhash: Hash = rpc_client
         .get_latest_blockhash()
@@ -151,15 +150,18 @@ pub fn set_config_value(cfg: &mut SkelzConfig, key: &str, value: &str) -> Result
 }
 
 pub fn default_config_file_path() -> PathBuf {
-    if let Some(proj) = ProjectDirs::from("io", "kevredlabs", "skelz") {
-        return proj.config_dir().join("config.toml");
-    }
-    dirs_fallback_config_path()
+    xdg_config_home().join("skelz").join("config.toml")
 }
 
-pub fn dirs_fallback_config_path() -> PathBuf {
+pub fn xdg_config_home() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        let trimmed = xdg.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
     let home = dirs_next::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.join(".config").join("skelz").join("config.toml")
+    home.join(".config")
 }
 
 pub fn default_solana_keypair_path() -> PathBuf {
@@ -168,8 +170,7 @@ pub fn default_solana_keypair_path() -> PathBuf {
             return expand_tilde(Path::new(&env_kp));
         }
     }
-    let home = dirs_next::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.join(".config").join("solana").join("id.json")
+    xdg_config_home().join("skelz").join("id.json")
 }
 
 pub fn default_cluster_rpc_url(cluster: &str) -> String {
