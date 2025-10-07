@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::hash::Hash;
 use solana_sdk::instruction::Instruction;
@@ -13,6 +14,8 @@ use solana_sdk::signature::{read_keypair_file, Signer};
 use solana_sdk::transaction::Transaction;
 use thiserror::Error;
 use tracing::info;
+use sha2::{Digest, Sha256};
+use oci_client::{Client, Reference, secrets::RegistryAuth, client::ClientConfig};
 
 #[derive(Debug, Error)]
 pub enum SkelzError {
@@ -30,6 +33,55 @@ pub struct SkelzConfig {
     pub rpc_url: String,
     pub keypair_path: PathBuf,
     pub commitment: String,
+}
+
+/// Structure for the Solana memo containing image signature information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageSignatureMemo {
+    pub version: u32,
+    pub artifact: ImageArtifact,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageArtifact {
+    pub kind: String,
+    pub digest: String,
+}
+
+/// Structure for the Solana proof payload to be uploaded as OCI artifact
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SolanaProofPayload {
+    pub network: String,
+    pub tx_hash: String,
+    pub tool: String,
+}
+
+/// OCI Artifact Manifest v1 structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactManifest {
+    #[serde(rename = "mediaType")]
+    pub media_type: String,
+    pub artifact_type: String,
+    pub blobs: Vec<BlobDescriptor>,
+    pub subject: Option<SubjectDescriptor>,
+    pub annotations: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobDescriptor {
+    #[serde(rename = "mediaType")]
+    pub media_type: String,
+    pub digest: String,
+    pub size: i64,
+    pub annotations: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubjectDescriptor {
+    #[serde(rename = "mediaType")]
+    pub media_type: String,
+    pub digest: String,
+    pub size: i64,
 }
 
 impl Default for SkelzConfig {
@@ -128,6 +180,67 @@ pub fn sign_memo(message: &str, cfg: &SkelzConfig) -> Result<String> {
     Ok(signature.to_string())
 }
 
+/// Calculate Docker image digest using docker inspect
+pub fn calculate_docker_digest(image_reference: &str) -> Result<String> {
+    use std::process::Command;
+    
+    let output = Command::new("docker")
+        .args(&["inspect", "--format={{.RepoDigests}}", image_reference])
+        .output()
+        .context("Failed to run docker inspect")?;
+    
+    if !output.status.success() {
+        return Err(anyhow!("Docker inspect failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let output_str = output_str.trim();
+    
+    if output_str.is_empty() || output_str == "[]" {
+        return Err(anyhow!("No digest found for image {}. Make sure the image is pulled and has a digest.", image_reference));
+    }
+    
+    // Parse the digest from the output format: [registry/repo@sha256:digest]
+    if let Some(start) = output_str.find("@sha256:") {
+        let digest_part = &output_str[start + 1..]; // Remove the @
+        if let Some(end) = digest_part.find(']') {
+            Ok(digest_part[..end].to_string())
+        } else {
+            Ok(digest_part.to_string())
+        }
+    } else {
+        Err(anyhow!("Could not parse digest from docker inspect output: {}", output_str))
+    }
+}
+
+/// Sign a Docker image by publishing a memo on Solana
+pub fn sign_docker_image(image_reference: &str, cfg: &SkelzConfig) -> Result<String> {
+    // Calculate the image digest
+    let digest = calculate_docker_digest(image_reference)?;
+    info!(%digest, "calculated image digest");
+    
+    // Create the signature memo
+    let memo = ImageSignatureMemo {
+        version: 1,
+        artifact: ImageArtifact {
+            kind: "oci-image".to_string(),
+            digest: digest.clone(),
+        },
+    };
+    
+    // Serialize to JSON
+    let memo_json = serde_json::to_string(&memo)
+        .context("Failed to serialize memo to JSON")?;
+    
+    info!(%memo_json, "publishing signature memo");
+    
+    // Publish the memo on Solana
+    let signature = sign_memo(&memo_json, cfg)?;
+    
+    info!(%signature, %image_reference, "image signed successfully");
+    Ok(signature)
+}
+
 pub fn get_config_value(cfg: &SkelzConfig, key: &str) -> Result<String> {
     match key {
         "cluster" => Ok(cfg.cluster.clone()),
@@ -190,6 +303,129 @@ pub fn expand_tilde(path: &Path) -> PathBuf {
         }
     }
     PathBuf::from(path)
+}
+
+/// Sign an image with Solana and upload proof as OCI artifact
+pub async fn sign_image_with_oci(
+    image_reference: &str,
+    config: &SkelzConfig,
+    username: &str,
+    token: &str,
+) -> Result<String> {
+    // Parse the canonical image reference
+    let reference = Reference::try_from(image_reference)
+        .context("Failed to parse image reference")?;
+    
+    // Sign the image on Solana first
+    let signature = sign_docker_image(image_reference, config)?;
+    info!(%signature, "image signed on Solana");
+    
+    // Create the Solana proof payload
+    let payload = SolanaProofPayload {
+        network: "solana-mainnet".to_string(),
+        tx_hash: signature.clone(),
+        tool: "skelz-cli@v1.0.0".to_string(),
+    };
+    
+    let payload_json = json!(payload);
+    let payload_bytes = serde_json::to_vec(&payload_json)
+        .context("Failed to serialize payload to JSON")?;
+    
+    // Calculate digest of the payload
+    let mut hasher = Sha256::new();
+    hasher.update(&payload_bytes);
+    let payload_digest = format!("sha256:{:x}", hasher.finalize());
+    
+    // Configure OCI client
+    let client_config = ClientConfig::default();
+    let client = Client::new(client_config);
+    
+    // Create authentication based on registry
+    let auth = RegistryAuth::Basic(username.to_string(), token.to_string());
+    
+    // Authenticate with the registry first
+    info!("Authenticating with registry...");
+    client.auth(&reference, &auth, oci_client::RegistryOperation::Push).await
+        .context("Failed to authenticate with registry")?;
+    
+    // Upload the blob to the registry
+    info!("Uploading proof blob to registry...");
+    client.push_blob(&reference, &payload_bytes, &payload_digest).await
+        .context("Failed to upload blob to registry")?;
+    
+    // Use Image Manifest for Docker Hub (creates a new image with annotations)
+    info!("Using Image Manifest for Docker Hub...");
+    
+    let mut annotations = std::collections::BTreeMap::new();
+    annotations.insert("org.opencontainers.artifact.type".to_string(), "application/vnd.skelz.proof.v1+json".to_string());
+    annotations.insert("org.opencontainers.artifact.created".to_string(), chrono::Utc::now().to_rfc3339());
+    annotations.insert("skelz.signature".to_string(), signature.clone());
+    annotations.insert("skelz.original-image".to_string(), image_reference.to_string());
+    annotations.insert("skelz.original-digest".to_string(), reference.digest().unwrap_or_default().to_string());
+    annotations.insert("skelz.tool".to_string(), "skelz-cli@v1.0.0".to_string());
+    
+    let image_manifest = oci_client::manifest::OciImageManifest {
+        schema_version: 2,
+        media_type: Some("application/vnd.oci.image.manifest.v1+json".to_string()),
+        artifact_type: None,
+        config: oci_client::manifest::OciDescriptor {
+            media_type: "application/vnd.skelz.proof.v1+json".to_string(),
+            digest: payload_digest.clone(),
+            size: payload_bytes.len() as i64,
+            urls: None,
+            annotations: None,
+        },
+        layers: vec![],
+        annotations: Some(annotations),
+        subject: None,
+    };
+    
+    // Wrap in OciManifest enum
+    let artifact_manifest = oci_client::manifest::OciManifest::Image(image_manifest);
+    
+    // Create a reference for the artifact manifest with digest suffix for easy identification
+    let digest_suffix = reference.digest().unwrap_or_default().replace("sha256:", "").chars().take(12).collect::<String>();
+    let artifact_reference_str = format!("{}:skelz-proof-{}", reference.repository(), digest_suffix);
+    let artifact_reference = Reference::try_from(artifact_reference_str.as_str())
+        .context("Failed to create artifact reference")?;
+    
+    // Upload the artifact manifest
+    info!("Uploading image manifest to Docker Hub...");
+    client.push_manifest(&artifact_reference, &artifact_manifest).await
+        .context("Failed to upload artifact manifest")?;
+    
+    info!("Image manifest uploaded successfully to Docker Hub");
+    info!("Artifact image created: {}", artifact_reference_str);
+    
+    info!(%signature, "artifact uploaded successfully");
+    Ok(signature)
+}
+
+
+
+/// Build an OCI Artifact Manifest v1
+pub fn build_artifact_manifest(
+    media_type: &str,
+    subject_digest: &str,
+    blob_digest: &str,
+    blob_size: i64,
+) -> ArtifactManifest {
+    ArtifactManifest {
+        media_type: "application/vnd.oci.artifact.manifest.v1+json".to_string(),
+        artifact_type: media_type.to_string(),
+        blobs: vec![BlobDescriptor {
+            media_type: media_type.to_string(),
+            digest: blob_digest.to_string(),
+            size: blob_size,
+            annotations: None,
+        }],
+        subject: Some(SubjectDescriptor {
+            media_type: "application/vnd.oci.image.manifest.v1+json".to_string(),
+            digest: subject_digest.to_string(),
+            size: 0, // We don't have the actual manifest size
+        }),
+        annotations: None,
+    }
 }
 
 #[cfg(test)]
