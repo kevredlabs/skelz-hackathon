@@ -2,12 +2,9 @@ name: private-key-signing-and-verifying
 
 on:
   push:
-    branches: '[main]' 
+    branches: [main]
     paths:
       - 'test/cypherpunk-demo-image/**'
-      - '.github/workflows/private-key-signing.yml'
-  workflow_dispatch: # Allow manual trigger
-
 jobs:
   build-and-sign-image:
     runs-on: ubuntu-latest
