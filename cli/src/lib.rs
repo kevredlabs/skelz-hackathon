@@ -33,9 +33,9 @@ pub struct SkelzConfig {
     pub keypair_path: PathBuf,
     pub commitment: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub docker_login: Option<String>,
+    pub ghcr_user: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub docker_pass: Option<String>,
+    pub ghcr_token: Option<String>,
 }
 
 /// Structure for the Solana memo containing image signature information
@@ -94,8 +94,8 @@ impl Default for SkelzConfig {
             rpc_url: default_cluster_rpc_url("devnet"),
             keypair_path: default_solana_keypair_path(),
             commitment: "confirmed".to_string(),
-            docker_login: None,
-            docker_pass: None,
+            ghcr_user: None,
+            ghcr_token: None,
         }
     }
 }
@@ -132,17 +132,17 @@ pub fn read_config_file() -> Result<SkelzConfig> {
     Ok(cfg)
 }
 
-pub fn resolve_dockerhub_credentials(cfg: &SkelzConfig) -> Result<(String, String)> {
-    let env_login = std::env::var("DOCKERHUB_LOGIN").ok().filter(|v| !v.trim().is_empty());
-    let env_pass = std::env::var("DOCKERHUB_PASS").ok().filter(|v| !v.trim().is_empty());
+pub fn resolve_ghcr_credentials(cfg: &SkelzConfig) -> Result<(String, String)> {
+    let env_user = std::env::var("GHCR_USER").ok().filter(|v| !v.trim().is_empty());
+    let env_token = std::env::var("GHCR_TOKEN").ok().filter(|v| !v.trim().is_empty());
 
-    let login = env_login.or_else(|| cfg.docker_login.clone());
-    let pass = env_pass.or_else(|| cfg.docker_pass.clone());
+    let user = env_user.or_else(|| cfg.ghcr_user.clone());
+    let token = env_token.or_else(|| cfg.ghcr_token.clone());
 
-    match (login, pass) {
-        (Some(l), Some(p)) => Ok((l, p)),
+    match (user, token) {
+        (Some(u), Some(t)) => Ok((u, t)),
         _ => Err(anyhow!(
-            "DockerHub credentials not found. Set DOCKERHUB_LOGIN/DOCKERHUB_PASS or set docker_login/docker_pass in config.toml"
+            "GHCR credentials not found. Set GHCR_USER/GHCR_TOKEN or set ghcr_user/ghcr_token in config.toml"
         )),
     }
 }
@@ -245,9 +245,9 @@ pub fn get_config_value(cfg: &SkelzConfig, key: &str) -> Result<String> {
         "rpc_url" => Ok(cfg.rpc_url.clone()),
         "keypair_path" => Ok(cfg.keypair_path.display().to_string()),
         "commitment" => Ok(cfg.commitment.clone()),
-        "docker_login" => Ok(cfg.docker_login.clone().unwrap_or_default()),
+        "ghcr_user" => Ok(cfg.ghcr_user.clone().unwrap_or_default()),
         // Do not print secrets in clear text
-        "docker_pass" => Ok("<redacted>".to_string()),
+        "ghcr_token" => Ok("<redacted>".to_string()),
         _ => Err(SkelzError::UnknownConfigKey(key.to_string()).into()),
     }
 }
@@ -258,8 +258,8 @@ pub fn set_config_value(cfg: &mut SkelzConfig, key: &str, value: &str) -> Result
         "rpc_url" => cfg.rpc_url = value.to_string(),
         "keypair_path" => cfg.keypair_path = expand_tilde(Path::new(value)),
         "commitment" => cfg.commitment = value.to_string(),
-        "docker_login" => cfg.docker_login = Some(value.to_string()),
-        "docker_pass" => cfg.docker_pass = Some(value.to_string()),
+        "ghcr_user" => cfg.ghcr_user = Some(value.to_string()),
+        "ghcr_token" => cfg.ghcr_token = Some(value.to_string()),
         _ => return Err(SkelzError::UnknownConfigKey(key.to_string()).into()),
     }
     Ok(())
@@ -358,8 +358,6 @@ pub fn sign_image_with_oci(
     cmd.arg("attach")
         .arg("--artifact-type")
         .arg("application/vnd.skelz.proof.v1+json")
-        .arg("--annotation")
-        .arg(format!("org.opencontainers.artifact.created={}", chrono::Utc::now().to_rfc3339()))
         .arg("--annotation")
         .arg(format!("skelz.signature={}", signature))
         .arg("--annotation")

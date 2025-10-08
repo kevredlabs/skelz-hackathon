@@ -6,8 +6,8 @@ use tracing_subscriber::EnvFilter;
 
 use skelz::{
     default_cluster_rpc_url, default_config_file_path, expand_tilde, get_config_value,
-    load_config_with_overrides, resolve_dockerhub_credentials, save_default_config, set_config_value,
-    sign_memo, write_config_file, sign_image_with_oci, SkelzConfig,
+    load_config_with_overrides, resolve_ghcr_credentials, save_default_config, set_config_value,
+    write_config_file, sign_image_with_oci, SkelzConfig,
 };
 
 #[derive(Debug, Parser)]
@@ -26,10 +26,8 @@ enum Commands {
     /// Manage configuration
     #[command(subcommand)]
     Config(ConfigCommand),
-    /// Publish a text memo transaction on Solana
-    Sign(SignCmd),
     /// Sign a Docker image with Solana signature and upload to OCI registry
-    SignImage(SignImageCmd),
+    Sign(SignCmd),
     /// Verify (placeholder)
     Verify(VerifyCmd),
     /// Registry operations
@@ -49,14 +47,14 @@ enum ConfigCommand {
 
 #[derive(Debug, Subcommand)]
 enum RegistryCommand {
-    /// Log into Docker registry (Docker Hub) using env/TOML creds
+    /// Log into GitHub Container Registry (GHCR) using env/TOML creds
     Login(RegistryLoginCmd),
 }
 
 #[derive(Debug, Args)]
 struct RegistryLoginCmd {
-    /// Registry hostname (default: index.docker.io)
-    #[arg(long = "registry", default_value = "index.docker.io")]
+    /// Registry hostname (default: ghcr.io)
+    #[arg(long = "registry", default_value = "ghcr.io")]
     registry: String,
     /// Username override (else resolved via env/TOML)
     #[arg(long = "username")]
@@ -98,18 +96,6 @@ struct ConfigSetCmd {
 
 #[derive(Debug, Args)]
 struct SignCmd {
-    /// Text message to publish on-chain via Memo program
-    message: String,
-    /// RPC URL (overrides config and env)
-    #[arg(long = "rpc-url")]
-    rpc_url: Option<String>,
-    /// Path to Solana keypair (id.json) (overrides config and env)
-    #[arg(long = "keypair")]
-    keypair_path: Option<PathBuf>,
-}
-
-#[derive(Debug, Args)]
-struct SignImageCmd {
     /// Canonical image reference with digest (e.g., docker.io/tonorg/tonimage@sha256:abc123...)
     image_reference: String,
     /// RPC URL (overrides config and env)
@@ -118,12 +104,6 @@ struct SignImageCmd {
     /// Path to Solana keypair (id.json) (overrides config and env)
     #[arg(long = "keypair")]
     keypair_path: Option<PathBuf>,
-    /// GitHub Container Registry username for authentication
-    #[arg(long = "ghcr-user")]
-    ghcr_user: Option<String>,
-    /// GitHub Container Registry token for authentication
-    #[arg(long = "ghcr-token")]
-    ghcr_token: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -200,13 +180,6 @@ fn main() -> Result<()> {
         },
         Commands::Sign(cmd) => {
             let config = load_config_with_overrides(cmd.rpc_url.clone(), cmd.keypair_path.clone())?;
-            let signature = sign_memo(&cmd.message, &config)?;
-            info!(%signature, "memo transaction sent");
-            println!("Signature={}", signature);
-            Ok(())
-        }
-        Commands::SignImage(cmd) => {
-            let config = load_config_with_overrides(cmd.rpc_url.clone(), cmd.keypair_path.clone())?;
             
             // Validate canonical reference format
             if !cmd.image_reference.contains("@sha256:") {
@@ -218,14 +191,8 @@ fn main() -> Result<()> {
                 return Err(anyhow::anyhow!("Only GitHub Container Registry is supported. Use format: ghcr.io/username/repo@sha256:abc123..."));
             }
             
-            // Check GHCR authentication credentials
-            let username = cmd.ghcr_user
-                .or_else(|| std::env::var("GHCR_USER").ok())
-                .ok_or_else(|| anyhow::anyhow!("GHCR username required. Set GHCR_USER environment variable or use --ghcr-user flag"))?;
-            
-            let token = cmd.ghcr_token
-                .or_else(|| std::env::var("GHCR_TOKEN").ok())
-                .ok_or_else(|| anyhow::anyhow!("GHCR token required. Set GHCR_TOKEN environment variable or use --ghcr-token flag"))?;
+            // Resolve GHCR authentication credentials from config
+            let (username, token) = resolve_ghcr_credentials(&config)?;
             
             // Sign image and upload to OCI registry
             let signature = sign_image_with_oci(&cmd.image_reference, &config, &username, &token)?;
@@ -242,7 +209,7 @@ fn main() -> Result<()> {
         Commands::Registry(cmd) => match cmd {
             RegistryCommand::Login(cmd) => {
                 let cfg = skelz::read_config_file().unwrap_or_default();
-                let (mut login, pass) = resolve_dockerhub_credentials(&cfg)?;
+                let (mut login, pass) = resolve_ghcr_credentials(&cfg)?;
                 if let Some(user_override) = cmd.username.as_deref() {
                     login = user_override.to_string();
                 }
@@ -267,7 +234,7 @@ fn main() -> Result<()> {
                 if !status.success() {
                     anyhow::bail!("docker login failed with status {}", status);
                 }
-                println!("docker login: success");
+                println!("ghcr login: success");
                 Ok(())
             }
         },
