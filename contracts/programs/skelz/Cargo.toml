@@ -1,0 +1,28 @@
+[package]
+name = "skelz"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "skelz"
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+anchor-lang = "0.31.1"
+
+
+
+
+[features]
+# Required by Anchor CLI when building the IDL
+idl-build = ["anchor-lang/idl-build"]
+
+# Define common Anchor feature flags to avoid unexpected cfg warnings
+no-entrypoint = []
+cpi = []
+no-idl = []
+no-log-ix-name = []
+custom-heap = []
+custom-panic = []
+anchor-debug = []
+
