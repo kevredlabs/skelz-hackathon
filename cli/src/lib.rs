@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::process::Command;
+use std::collections::HashMap;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -58,6 +59,32 @@ pub struct SolanaProofPayload {
     pub tx_hash: String,
     pub tool: String,
 }
+
+/// Structure for OCI artifact metadata with annotations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OciArtifact {
+    pub reference: String,
+    #[serde(rename = "mediaType")]
+    pub media_type: String,
+    pub digest: String,
+    pub size: u64,
+    pub annotations: HashMap<String, String>,
+    #[serde(rename = "artifactType")]
+    pub artifact_type: String,
+    pub referrers: Vec<OciArtifact>,
+}
+
+/// Structure for OCI discover response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OciDiscoverResponse {
+    pub reference: String,
+    #[serde(rename = "mediaType")]
+    pub media_type: String,
+    pub digest: String,
+    pub size: u64,
+    pub referrers: Vec<OciArtifact>,
+}
+
 
 impl Default for SkelzConfig {
     fn default() -> Self {
@@ -384,8 +411,301 @@ pub fn sign_image_with_oci(
     Ok(signature)
 }
 
+/// Discover OCI artifacts attached to an image
+pub fn discover_oci_artifacts(
+    image_reference: &str,
+    username: &str,
+    token: &str,
+) -> Result<Vec<OciArtifact>> {
+    info!("Discovering OCI artifacts for image: {}", image_reference);
+    
+    let mut cmd = Command::new("oras");
+    cmd.arg("discover")
+        .arg("--format")
+        .arg("json")
+        .arg(image_reference);
+    
+    // Set authentication
+    cmd.env("ORAS_USERNAME", username);
+    cmd.env("ORAS_PASSWORD", token);
+    
+    let output = cmd.output()
+        .context("Failed to execute oras discover command")?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!("oras discover failed:\nSTDOUT: {}\nSTDERR: {}", stdout, stderr);
+    }
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    info!("ORAS discover output: {}", stdout);
+    
+    // Parse the JSON response
+    let discover_response: OciDiscoverResponse = serde_json::from_str(&stdout)
+        .context("Failed to parse oras discover JSON response")?;
+    
+    info!("Found {} artifacts", discover_response.referrers.len());
+    Ok(discover_response.referrers)
+}
 
+/// Get the latest Skelz artifact from a list of OCI artifacts
+pub fn get_latest_skelz_artifact<'a>(artifacts: &'a [OciArtifact], expected_image: &str) -> Result<&'a OciArtifact> {
+    // Filter for Skelz artifacts (those with skelz.signature annotation and correct image)
+    let mut skelz_artifacts: Vec<&OciArtifact> = artifacts
+        .iter()
+        .filter(|artifact| {
+            artifact.annotations.contains_key("skelz.signature") &&
+            artifact.artifact_type == "application/vnd.skelz.proof.v1+json" &&
+            artifact.annotations.get("skelz.original-image") == Some(&expected_image.to_string())
+        })
+        .collect();
+    
+    if skelz_artifacts.is_empty() {
+        anyhow::bail!("No Skelz signature artifacts found for image: {}", expected_image);
+    }
+    
+    // Sort by creation time (most recent first)
+    skelz_artifacts.sort_by(|a, b| {
+        let time_a = a.annotations.get("org.opencontainers.artifact.created")
+            .or_else(|| a.annotations.get("org.opencontainers.image.created"))
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .unwrap_or_else(|| chrono::DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z").expect("Invalid fallback date"));
+        
+        let time_b = b.annotations.get("org.opencontainers.artifact.created")
+            .or_else(|| b.annotations.get("org.opencontainers.image.created"))
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .unwrap_or_else(|| chrono::DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z").expect("Invalid fallback date"));
+        
+        time_b.cmp(&time_a) // Most recent first
+    });
+    
+    info!("Found {} Skelz artifacts for image, using the most recent one", skelz_artifacts.len());
+    Ok(skelz_artifacts[0])
+}
 
+/// Simple verification function that only checks OCI artifacts (without Solana verification)
+pub fn verify_oci_artifacts(
+    image_reference: &str,
+    username: &str,
+    token: &str,
+) -> Result<()> {
+    info!("Starting OCI artifact verification for: {}", image_reference);
+    
+    // Step 1: Validate image reference format
+    if !image_reference.contains("@sha256:") {
+        anyhow::bail!("Image reference must be canonical with digest (e.g., ghcr.io/username/repo@sha256:abc123...)");
+    }
+    
+    if !image_reference.starts_with("ghcr.io") {
+        anyhow::bail!("Only GitHub Container Registry is supported. Use format: ghcr.io/username/repo@sha256:abc123...");
+    }
+    
+    // Step 2: Discover OCI artifacts
+    let artifacts = discover_oci_artifacts(image_reference, username, token)?;
+    
+    // Step 3: Get the latest Skelz artifact
+    let skelz_artifact = get_latest_skelz_artifact(&artifacts, image_reference)?;
+    
+    // Step 4: Display artifact information
+    info!("✅ OCI artifact verification successful!");
+    println!("✅ OCI artifact verification successful!");
+    println!("   Image: {}", image_reference);
+    println!("   Artifact reference: {}", skelz_artifact.reference);
+    println!("   Artifact digest: {}", skelz_artifact.digest);
+    println!("   Media type: {}", skelz_artifact.media_type);
+    println!("   Artifact type: {}", skelz_artifact.artifact_type);
+    println!("   Size: {} bytes", skelz_artifact.size);
+    
+    // Display annotations
+    println!("   Annotations:");
+    for (key, value) in &skelz_artifact.annotations {
+        println!("     {}: {}", key, value);
+    }
+    
+    Ok(())
+}
+
+/// Fetch a Solana transaction by signature and return signer pubkey and memo
+pub fn fetch_solana_transaction_with_memo(
+    tx_signature: &str,
+    rpc_url: &str,
+) -> Result<(String, ImageSignatureMemo)> {
+    info!("Fetching Solana transaction: {}", tx_signature);
+    
+    // Use tokio runtime for async operations
+    let rt = tokio::runtime::Runtime::new()
+        .context("Failed to create tokio runtime")?;
+    
+    rt.block_on(async {
+        let client = solana_client::nonblocking::rpc_client::RpcClient::new_with_commitment(
+            rpc_url.to_string(),
+            solana_sdk::commitment_config::CommitmentConfig::confirmed(),
+        );
+        
+        // Parse the signature
+        let signature = solana_sdk::signature::Signature::from_str(tx_signature)
+            .context("Invalid transaction signature format")?;
+        
+        // Configure the request
+        let config = solana_client::rpc_config::RpcTransactionConfig {
+            commitment: solana_sdk::commitment_config::CommitmentConfig::finalized().into(),
+            encoding: Some(solana_transaction_status::UiTransactionEncoding::Base64),
+            max_supported_transaction_version: Some(0),
+        };
+        
+        // Fetch the transaction
+        let tx = client
+            .get_transaction_with_config(&signature, config)
+            .await
+            .context("Failed to fetch transaction from Solana RPC")?;
+        
+        // Extract the signer and memo from the transaction
+        let (signer_pubkey, memo_data) = match &tx.transaction.transaction {
+            solana_transaction_status::EncodedTransaction::Binary(encoded_tx, _) => {
+                // Decode the base64 transaction
+                let tx_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded_tx)
+                    .context("Failed to decode transaction from base64")?;
+                
+                // Parse the transaction to get the signer and memo
+                let transaction: solana_sdk::transaction::VersionedTransaction = 
+                    bincode::deserialize(&tx_bytes)
+                        .context("Failed to deserialize transaction")?;
+                
+                // The first signature corresponds to the first account (fee payer/signer)
+                let signer = transaction.message.static_account_keys()[0];
+                let signer_pubkey = signer.to_string();
+                
+                // Extract memo data from the first instruction (memo instruction)
+                let memo_data = if let Some(instruction) = transaction.message.instructions().first() {
+                    // The memo instruction data is the memo content
+                    String::from_utf8(instruction.data.clone())
+                        .context("Memo data is not valid UTF-8")?
+                } else {
+                    anyhow::bail!("No instructions found in transaction");
+                };
+                
+                (signer_pubkey, memo_data)
+            }
+            _ => anyhow::bail!("Unexpected transaction encoding format"),
+        };
+        
+        println!("Signer pubkey: {}", signer_pubkey);
+        println!("Memo data: {}", memo_data);
+        
+        // Parse the memo to extract image information
+        let memo: ImageSignatureMemo = serde_json::from_str(&memo_data)
+            .context("Failed to parse memo as ImageSignatureMemo")?;
+        
+        println!("Parsed memo: {:#?}", memo);
+        
+        info!("Successfully fetched transaction from slot {}", tx.slot);
+        Ok((signer_pubkey, memo))
+    })
+}
+
+/// Verify that the transaction was signed by the expected signer
+pub fn verify_transaction_signer(
+    signer_pubkey: &str,
+    expected_signer: &str,
+) -> Result<()> {
+    info!("Verifying transaction signer: {}", expected_signer);
+    
+    let expected_pubkey = Pubkey::from_str(expected_signer)
+        .context("Invalid expected signer public key format")?;
+    
+    let signer_pubkey = Pubkey::from_str(signer_pubkey)
+        .context("Invalid signer public key in transaction")?;
+    
+    if signer_pubkey != expected_pubkey {
+        anyhow::bail!(
+            "Transaction signer mismatch: expected {}, got {}",
+            expected_pubkey,
+            signer_pubkey
+        );
+    }
+    
+    info!("Transaction signer verification successful");
+    Ok(())
+}
+
+/// Extract and verify the image digest from the Solana memo
+pub fn verify_image_digest(
+    memo: &ImageSignatureMemo,
+    expected_image_reference: &str,
+) -> Result<()> {
+    info!("Verifying image digest for: {}", expected_image_reference);
+    
+    // Extract expected digest from image reference
+    let expected_digest = extract_digest_from_reference(expected_image_reference)?;
+    info!("Expected digest: {}", expected_digest);
+    
+    // Verify the digest matches
+    if memo.artifact.digest != expected_digest {
+        anyhow::bail!(
+            "Image digest mismatch: expected {}, got {}",
+            expected_digest,
+            memo.artifact.digest
+        );
+    }
+    
+    // Verify the artifact kind
+    if memo.artifact.kind != "oci-image" {
+        anyhow::bail!(
+            "Invalid artifact kind: expected 'oci-image', got '{}'",
+            memo.artifact.kind
+        );
+    }
+    
+    info!("Image digest verification successful");
+    Ok(())
+}
+
+/// Complete verification function that checks both OCI artifacts and Solana transaction
+pub fn verify_image_signature(
+    image_reference: &str,
+    expected_signer: &str,
+    config: &SkelzConfig,
+    username: &str,
+    token: &str,
+) -> Result<()> {
+    info!("Starting complete image signature verification for: {}", image_reference);
+    
+    // Step 1: Validate image reference format
+    if !image_reference.contains("@sha256:") {
+        anyhow::bail!("Image reference must be canonical with digest (e.g., ghcr.io/username/repo@sha256:abc123...)");
+    }
+    
+    if !image_reference.starts_with("ghcr.io") {
+        anyhow::bail!("Only GitHub Container Registry is supported. Use format: ghcr.io/username/repo@sha256:abc123...");
+    }
+    
+    // Step 2: Discover OCI artifacts
+    let artifacts = discover_oci_artifacts(image_reference, username, token)?;
+    
+    // Step 3: Get the latest Skelz artifact
+    let skelz_artifact = get_latest_skelz_artifact(&artifacts, image_reference)?;
+    
+    // Step 4: Extract transaction signature from annotations
+    let tx_signature = skelz_artifact.annotations
+        .get("skelz.signature")
+        .ok_or_else(|| anyhow!("No skelz.signature annotation found in artifact"))?;
+    
+    info!("Found transaction signature: {}", tx_signature);
+    
+    // Step 5: Fetch the Solana transaction and extract signer + memo
+    let (signer_pubkey, memo) = fetch_solana_transaction_with_memo(tx_signature, &config.rpc_url)?;
+    
+    // Step 6: Verify the transaction signer
+    verify_transaction_signer(&signer_pubkey, expected_signer)?;
+    
+    // Step 7: Verify the image digest
+    verify_image_digest(&memo, image_reference)?;
+    
+    info!("✅ Complete image signature verification successful!");
+    println!("✅ Complete image signature verification successful!");
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {

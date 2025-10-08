@@ -7,7 +7,7 @@ use tracing_subscriber::EnvFilter;
 use skelz::{
     default_cluster_rpc_url, default_config_file_path, expand_tilde, get_config_value,
     load_config_with_overrides, resolve_ghcr_credentials, save_default_config, set_config_value,
-    write_config_file, sign_image_with_oci, SkelzConfig,
+    write_config_file, sign_image_with_oci, verify_image_signature, SkelzConfig,
 };
 
 #[derive(Debug, Parser)]
@@ -107,7 +107,16 @@ struct SignCmd {
 }
 
 #[derive(Debug, Args)]
-struct VerifyCmd {}
+struct VerifyCmd {
+    /// Canonical image reference with digest (e.g., ghcr.io/username/repo@sha256:abc123...)
+    image_reference: String,
+    /// Expected signer public key (base58 encoded)
+    #[arg(long = "signer")]
+    expected_signer: String,
+    /// RPC URL (overrides config and env)
+    #[arg(long = "rpc-url")]
+    rpc_url: Option<String>,
+}
 
 fn init_tracing(verbosity: u8) {
     let level = match verbosity {
@@ -202,8 +211,16 @@ fn main() -> Result<()> {
             println!("Artifact uploaded to GHCR: {}", cmd.image_reference);
             Ok(())
         }
-        Commands::Verify(_cmd) => {
-            println!("verify: not implemented yet");
+        Commands::Verify(cmd) => {
+            // Load config with overrides
+            let config = load_config_with_overrides(cmd.rpc_url.clone(), None)?;
+            
+            // Resolve GHCR authentication credentials from config
+            let (username, token) = resolve_ghcr_credentials(&config)?;
+            
+            // Verify complete image signature (OCI + Solana)
+            verify_image_signature(&cmd.image_reference, &cmd.expected_signer, &config, &username, &token)?;
+            
             Ok(())
         }
         Commands::Registry(cmd) => match cmd {
