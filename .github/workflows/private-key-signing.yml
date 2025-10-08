@@ -2,7 +2,7 @@ name: private-key-signing-and-verifying
 
 on:
   push:
-    branches: '**' 
+    branches: '[main]' 
     paths:
       - 'test/cypherpunk-demo-image/**'
       - '.github/workflows/private-key-signing.yml'

@@ -2,7 +2,7 @@ name: legacy-signing-and-verifying
 
 on:
   push:
-    branches: '**' 
+    branches: '[main]' 
     paths:
       - 'test/cypherpunk-demo-image/**'
       - '.github/workflows/container-signing.yml'
