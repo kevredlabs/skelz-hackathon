@@ -2,9 +2,11 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::hash::Hash;
 use solana_sdk::instruction::Instruction;
@@ -31,9 +33,30 @@ pub struct SkelzConfig {
     pub keypair_path: PathBuf,
     pub commitment: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub docker_login: Option<String>,
+    pub ghcr_user: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub docker_pass: Option<String>,
+    pub ghcr_token: Option<String>,
+}
+
+/// Structure for the Solana memo containing image signature information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageSignatureMemo {
+    pub version: u32,
+    pub artifact: ImageArtifact,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageArtifact {
+    pub kind: String,
+    pub digest: String,
+}
+
+/// Structure for the Solana proof payload to be uploaded as OCI artifact
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SolanaProofPayload {
+    pub network: String,
+    pub tx_hash: String,
+    pub tool: String,
 }
 
 impl Default for SkelzConfig {
@@ -43,8 +66,8 @@ impl Default for SkelzConfig {
             rpc_url: default_cluster_rpc_url("devnet"),
             keypair_path: default_solana_keypair_path(),
             commitment: "confirmed".to_string(),
-            docker_login: None,
-            docker_pass: None,
+            ghcr_user: None,
+            ghcr_token: None,
         }
     }
 }
@@ -81,17 +104,17 @@ pub fn read_config_file() -> Result<SkelzConfig> {
     Ok(cfg)
 }
 
-pub fn resolve_dockerhub_credentials(cfg: &SkelzConfig) -> Result<(String, String)> {
-    let env_login = std::env::var("DOCKERHUB_LOGIN").ok().filter(|v| !v.trim().is_empty());
-    let env_pass = std::env::var("DOCKERHUB_PASS").ok().filter(|v| !v.trim().is_empty());
+pub fn resolve_ghcr_credentials(cfg: &SkelzConfig) -> Result<(String, String)> {
+    let env_user = std::env::var("GHCR_USER").ok().filter(|v| !v.trim().is_empty());
+    let env_token = std::env::var("GHCR_TOKEN").ok().filter(|v| !v.trim().is_empty());
 
-    let login = env_login.or_else(|| cfg.docker_login.clone());
-    let pass = env_pass.or_else(|| cfg.docker_pass.clone());
+    let user = env_user.or_else(|| cfg.ghcr_user.clone());
+    let token = env_token.or_else(|| cfg.ghcr_token.clone());
 
-    match (login, pass) {
-        (Some(l), Some(p)) => Ok((l, p)),
+    match (user, token) {
+        (Some(u), Some(t)) => Ok((u, t)),
         _ => Err(anyhow!(
-            "DockerHub credentials not found. Set DOCKERHUB_LOGIN/DOCKERHUB_PASS or set docker_login/docker_pass in config.toml"
+            "GHCR credentials not found. Set GHCR_USER/GHCR_TOKEN or set ghcr_user/ghcr_token in config.toml"
         )),
     }
 }
@@ -149,15 +172,54 @@ pub fn sign_memo(message: &str, cfg: &SkelzConfig) -> Result<String> {
     Ok(signature.to_string())
 }
 
+/// Extract digest from canonical image reference
+pub fn extract_digest_from_reference(image_reference: &str) -> Result<String> {
+    // Parse the digest from the canonical reference format: registry/repo@sha256:digest
+    if let Some(start) = image_reference.find("@sha256:") {
+        let digest_part = &image_reference[start + 1..]; // Remove the @
+        Ok(digest_part.to_string())
+    } else {
+        Err(anyhow!("No digest found in image reference {}. Expected format: registry/repo@sha256:digest", image_reference))
+    }
+}
+
+/// Sign a Docker image by publishing a memo on Solana
+pub fn sign_docker_image(image_reference: &str, cfg: &SkelzConfig) -> Result<String> {
+    // Extract the image digest from the canonical reference
+    let digest = extract_digest_from_reference(image_reference)?;
+    info!(%digest, "calculated image digest");
+    
+    // Create the signature memo
+    let memo = ImageSignatureMemo {
+        version: 1,
+        artifact: ImageArtifact {
+            kind: "oci-image".to_string(),
+            digest: digest.clone(),
+        },
+    };
+    
+    // Serialize to JSON
+    let memo_json = serde_json::to_string(&memo)
+        .context("Failed to serialize memo to JSON")?;
+    
+    info!(%memo_json, "publishing signature memo");
+    
+    // Publish the memo on Solana
+    let signature = sign_memo(&memo_json, cfg)?;
+    
+    info!(%signature, %image_reference, "image signed successfully");
+    Ok(signature)
+}
+
 pub fn get_config_value(cfg: &SkelzConfig, key: &str) -> Result<String> {
     match key {
         "cluster" => Ok(cfg.cluster.clone()),
         "rpc_url" => Ok(cfg.rpc_url.clone()),
         "keypair_path" => Ok(cfg.keypair_path.display().to_string()),
         "commitment" => Ok(cfg.commitment.clone()),
-        "docker_login" => Ok(cfg.docker_login.clone().unwrap_or_default()),
+        "ghcr_user" => Ok(cfg.ghcr_user.clone().unwrap_or_default()),
         // Do not print secrets in clear text
-        "docker_pass" => Ok("<redacted>".to_string()),
+        "ghcr_token" => Ok("<redacted>".to_string()),
         _ => Err(SkelzError::UnknownConfigKey(key.to_string()).into()),
     }
 }
@@ -168,8 +230,8 @@ pub fn set_config_value(cfg: &mut SkelzConfig, key: &str, value: &str) -> Result
         "rpc_url" => cfg.rpc_url = value.to_string(),
         "keypair_path" => cfg.keypair_path = expand_tilde(Path::new(value)),
         "commitment" => cfg.commitment = value.to_string(),
-        "docker_login" => cfg.docker_login = Some(value.to_string()),
-        "docker_pass" => cfg.docker_pass = Some(value.to_string()),
+        "ghcr_user" => cfg.ghcr_user = Some(value.to_string()),
+        "ghcr_token" => cfg.ghcr_token = Some(value.to_string()),
         _ => return Err(SkelzError::UnknownConfigKey(key.to_string()).into()),
     }
     Ok(())
@@ -217,6 +279,113 @@ pub fn expand_tilde(path: &Path) -> PathBuf {
     }
     PathBuf::from(path)
 }
+
+/// Sign an image with Solana and upload proof as OCI artifact
+pub fn sign_image_with_oci(
+    image_reference: &str,
+    config: &SkelzConfig,
+    username: &str,
+    token: &str,
+) -> Result<String> {
+    info!("Signing image with OCI: {}", image_reference);
+    
+    // Sign the image on Solana first
+    let signature = sign_docker_image(image_reference, config)?;
+    info!(%signature, "image signed on Solana");
+    
+    // Create the Solana proof payload
+    let payload = SolanaProofPayload {
+        network: "solana-mainnet".to_string(),
+        tx_hash: signature.clone(),
+        tool: "skelz-cli@v1.0.0".to_string(),
+    };
+    
+    let payload_json = json!(payload);
+    let payload_bytes = serde_json::to_vec(&payload_json)
+        .context("Failed to serialize payload to JSON")?;
+    
+    // Write payload to temporary file in current directory
+    let signature_file = std::path::PathBuf::from("skelz-signature.json");
+    std::fs::write(&signature_file, &payload_bytes)
+        .context("Failed to write signature file")?;
+    
+    // Ensure image reference is for GHCR
+    let ghcr_reference = if image_reference.starts_with("ghcr.io/") {
+        image_reference.to_string()
+    } else {
+        // Extract repository and digest from the original reference
+        let parts: Vec<&str> = image_reference.split('/').collect();
+        if parts.len() >= 2 {
+            let repo_with_tag = parts[1..].join("/");
+            format!("ghcr.io/{}", repo_with_tag)
+        } else {
+            anyhow::bail!("Invalid image reference format: {}", image_reference);
+        }
+    };
+    
+    info!("Using GHCR reference: {}", ghcr_reference);
+    
+    // Use oras attach to attach the signature to the image
+    let mut cmd = Command::new("oras");
+    cmd.arg("attach")
+        .arg("--artifact-type")
+        .arg("application/vnd.skelz.proof.v1+json")
+        .arg("--annotation")
+        .arg(format!("skelz.signature={}", signature))
+        .arg("--annotation")
+        .arg(format!("skelz.original-image={}", image_reference))
+        .arg("--annotation")
+        .arg("skelz.tool=skelz-cli@v1.0.0")
+        .arg(&ghcr_reference)
+        .arg(&signature_file);
+    
+    // Set authentication
+    cmd.env("ORAS_USERNAME", username);
+    cmd.env("ORAS_PASSWORD", token);
+    
+    info!("Running oras attach command...");
+    let output = cmd.output()
+        .context("Failed to execute oras command")?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!("oras attach failed:\nSTDOUT: {}\nSTDERR: {}", stdout, stderr);
+    }
+    
+    info!("Successfully attached signature to image: {}", ghcr_reference);
+    
+    // Discover and display attached artifacts
+    info!("Discovering attached artifacts...");
+    let mut discover_cmd = Command::new("oras");
+    discover_cmd.arg("discover")
+        .arg(&ghcr_reference);
+    
+    // Set authentication for discover command
+    discover_cmd.env("ORAS_USERNAME", username);
+    discover_cmd.env("ORAS_PASSWORD", token);
+    
+    let discover_output = discover_cmd.output()
+        .context("Failed to execute oras discover command")?;
+    
+    if discover_output.status.success() {
+        let discover_stdout = String::from_utf8_lossy(&discover_output.stdout);
+        info!("Attached artifacts:\n{}", discover_stdout);
+        println!("Attached artifacts:\n{}", discover_stdout);
+    } else {
+        let discover_stderr = String::from_utf8_lossy(&discover_output.stderr);
+        info!("Warning: Could not discover artifacts: {}", discover_stderr);
+    }
+    
+    // Clean up temporary file
+    let _ = std::fs::remove_file(&signature_file);
+    
+    info!(%signature, "signature attached successfully");
+    Ok(signature)
+}
+
+
+
 
 #[cfg(test)]
 mod tests {
