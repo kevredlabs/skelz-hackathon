@@ -1,0 +1,21 @@
+[features]
+seeds = false
+skip-lint = false
+
+[programs.localnet]
+skelz = "11111111111111111111111111111111"
+
+[programs.devnet]
+skelz = "11111111111111111111111111111111"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[toolchain]
+anchor_version = "0.31.1"
+
+

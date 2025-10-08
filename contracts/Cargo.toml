@@ -1,0 +1,10 @@
+[workspace]
+resolver = "1"
+members = [
+    "programs/skelz",
+]
+
+[profile.release]
+overflow-checks = true
+
+
