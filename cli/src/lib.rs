@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,6 @@ use solana_sdk::signature::{read_keypair_file, Signer};
 use solana_sdk::transaction::Transaction;
 use thiserror::Error;
 use tracing::info;
-use std::process::Command;
 
 #[derive(Debug, Error)]
 pub enum SkelzError {
@@ -57,34 +57,6 @@ pub struct SolanaProofPayload {
     pub network: String,
     pub tx_hash: String,
     pub tool: String,
-}
-
-/// OCI Artifact Manifest v1 structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArtifactManifest {
-    #[serde(rename = "mediaType")]
-    pub media_type: String,
-    pub artifact_type: String,
-    pub blobs: Vec<BlobDescriptor>,
-    pub subject: Option<SubjectDescriptor>,
-    pub annotations: Option<std::collections::HashMap<String, String>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlobDescriptor {
-    #[serde(rename = "mediaType")]
-    pub media_type: String,
-    pub digest: String,
-    pub size: i64,
-    pub annotations: Option<std::collections::HashMap<String, String>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubjectDescriptor {
-    #[serde(rename = "mediaType")]
-    pub media_type: String,
-    pub digest: String,
-    pub size: i64,
 }
 
 impl Default for SkelzConfig {
@@ -414,30 +386,6 @@ pub fn sign_image_with_oci(
 
 
 
-/// Build an OCI Artifact Manifest v1
-pub fn build_artifact_manifest(
-    media_type: &str,
-    subject_digest: &str,
-    blob_digest: &str,
-    blob_size: i64,
-) -> ArtifactManifest {
-    ArtifactManifest {
-        media_type: "application/vnd.oci.artifact.manifest.v1+json".to_string(),
-        artifact_type: media_type.to_string(),
-        blobs: vec![BlobDescriptor {
-            media_type: media_type.to_string(),
-            digest: blob_digest.to_string(),
-            size: blob_size,
-            annotations: None,
-        }],
-        subject: Some(SubjectDescriptor {
-            media_type: "application/vnd.oci.image.manifest.v1+json".to_string(),
-            digest: subject_digest.to_string(),
-            size: 0, // We don't have the actual manifest size
-        }),
-        annotations: None,
-    }
-}
 
 #[cfg(test)]
 mod tests {
