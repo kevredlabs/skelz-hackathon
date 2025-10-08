@@ -48,3 +48,5 @@ keys/
 docs/evidence/
 
 
+*.env
+.env.local

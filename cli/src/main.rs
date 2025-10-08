@@ -99,12 +99,12 @@ struct SignImageCmd {
     /// Path to Solana keypair (id.json) (overrides config and env)
     #[arg(long = "keypair")]
     keypair_path: Option<PathBuf>,
-    /// Docker Hub username for authentication
-    #[arg(long = "dockerhub-user")]
-    dockerhub_user: Option<String>,
-    /// Docker Hub token for authentication
-    #[arg(long = "dockerhub-token")]
-    dockerhub_token: Option<String>,
+    /// GitHub Container Registry username for authentication
+    #[arg(long = "ghcr-user")]
+    ghcr_user: Option<String>,
+    /// GitHub Container Registry token for authentication
+    #[arg(long = "ghcr-token")]
+    ghcr_token: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -191,30 +191,29 @@ fn main() -> Result<()> {
             
             // Validate canonical reference format
             if !cmd.image_reference.contains("@sha256:") {
-                return Err(anyhow::anyhow!("Image reference must be canonical with digest (e.g., docker.io/tonorg/tonimage@sha256:abc123...)"));
+                return Err(anyhow::anyhow!("Image reference must be canonical with digest (e.g., ghcr.io/username/repo@sha256:abc123...)"));
             }
             
-            // Validate Docker Hub reference
-            if !cmd.image_reference.starts_with("docker.io") && !cmd.image_reference.starts_with("index.docker.io") {
-                return Err(anyhow::anyhow!("Only Docker Hub is supported. Use format: docker.io/user/repo@sha256:abc123..."));
+            // Validate GHCR reference
+            if !cmd.image_reference.starts_with("ghcr.io") {
+                return Err(anyhow::anyhow!("Only GitHub Container Registry is supported. Use format: ghcr.io/username/repo@sha256:abc123..."));
             }
             
-            // Check Docker Hub authentication credentials
-            let username = cmd.dockerhub_user
-                .or_else(|| std::env::var("DOCKERHUB_USER").ok())
-                .ok_or_else(|| anyhow::anyhow!("Docker Hub username required. Set DOCKERHUB_USER environment variable or use --dockerhub-user flag"))?;
+            // Check GHCR authentication credentials
+            let username = cmd.ghcr_user
+                .or_else(|| std::env::var("GHCR_USER").ok())
+                .ok_or_else(|| anyhow::anyhow!("GHCR username required. Set GHCR_USER environment variable or use --ghcr-user flag"))?;
             
-            let token = cmd.dockerhub_token
-                .or_else(|| std::env::var("DOCKERHUB_TOKEN").ok())
-                .ok_or_else(|| anyhow::anyhow!("Docker Hub token required. Set DOCKERHUB_TOKEN environment variable or use --dockerhub-token flag"))?;
+            let token = cmd.ghcr_token
+                .or_else(|| std::env::var("GHCR_TOKEN").ok())
+                .ok_or_else(|| anyhow::anyhow!("GHCR token required. Set GHCR_TOKEN environment variable or use --ghcr-token flag"))?;
             
             // Sign image and upload to OCI registry
-            let signature = tokio::runtime::Runtime::new()?
-                .block_on(sign_image_with_oci(&cmd.image_reference, &config, &username, &token))?;
+            let signature = sign_image_with_oci(&cmd.image_reference, &config, &username, &token)?;
             
-            info!(%signature, "image signed and uploaded to Docker Hub");
+            info!(%signature, "image signed and uploaded to GHCR");
             println!("Image Signature={}", signature);
-            println!("Artifact uploaded to Docker Hub: {}", cmd.image_reference);
+            println!("Artifact uploaded to GHCR: {}", cmd.image_reference);
             Ok(())
         }
         Commands::Verify(_cmd) => {

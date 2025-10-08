@@ -1,0 +1,7 @@
+{
+ "org.opencontainers.artifact.type": "application/vnd.skelz.proof.v1+json",
+  "org.opencontainers.artifact.created": "2024-01-15T10:30:45Z",
+  "skelz.signature": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "skelz.original-image": "ghcr.io/kevredlabs/cypherpunk-demo@sha256:53847b1184f2aea29a72e072d39f0aef7ff6305c9672ae9803fcca40c188d234",
+  "skelz.tool": "skelz-cli@v1.0.0"
+}

@@ -14,8 +14,7 @@ use solana_sdk::signature::{read_keypair_file, Signer};
 use solana_sdk::transaction::Transaction;
 use thiserror::Error;
 use tracing::info;
-use sha2::{Digest, Sha256};
-use oci_client::{Client, Reference, secrets::RegistryAuth, client::ClientConfig};
+use std::process::Command;
 
 #[derive(Debug, Error)]
 pub enum SkelzError {
@@ -180,43 +179,21 @@ pub fn sign_memo(message: &str, cfg: &SkelzConfig) -> Result<String> {
     Ok(signature.to_string())
 }
 
-/// Calculate Docker image digest using docker inspect
-pub fn calculate_docker_digest(image_reference: &str) -> Result<String> {
-    use std::process::Command;
-    
-    let output = Command::new("docker")
-        .args(&["inspect", "--format={{.RepoDigests}}", image_reference])
-        .output()
-        .context("Failed to run docker inspect")?;
-    
-    if !output.status.success() {
-        return Err(anyhow!("Docker inspect failed: {}", String::from_utf8_lossy(&output.stderr)));
-    }
-    
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    let output_str = output_str.trim();
-    
-    if output_str.is_empty() || output_str == "[]" {
-        return Err(anyhow!("No digest found for image {}. Make sure the image is pulled and has a digest.", image_reference));
-    }
-    
-    // Parse the digest from the output format: [registry/repo@sha256:digest]
-    if let Some(start) = output_str.find("@sha256:") {
-        let digest_part = &output_str[start + 1..]; // Remove the @
-        if let Some(end) = digest_part.find(']') {
-            Ok(digest_part[..end].to_string())
-        } else {
-            Ok(digest_part.to_string())
-        }
+/// Extract digest from canonical image reference
+pub fn extract_digest_from_reference(image_reference: &str) -> Result<String> {
+    // Parse the digest from the canonical reference format: registry/repo@sha256:digest
+    if let Some(start) = image_reference.find("@sha256:") {
+        let digest_part = &image_reference[start + 1..]; // Remove the @
+        Ok(digest_part.to_string())
     } else {
-        Err(anyhow!("Could not parse digest from docker inspect output: {}", output_str))
+        Err(anyhow!("No digest found in image reference {}. Expected format: registry/repo@sha256:digest", image_reference))
     }
 }
 
 /// Sign a Docker image by publishing a memo on Solana
 pub fn sign_docker_image(image_reference: &str, cfg: &SkelzConfig) -> Result<String> {
-    // Calculate the image digest
-    let digest = calculate_docker_digest(image_reference)?;
+    // Extract the image digest from the canonical reference
+    let digest = extract_digest_from_reference(image_reference)?;
     info!(%digest, "calculated image digest");
     
     // Create the signature memo
@@ -306,15 +283,13 @@ pub fn expand_tilde(path: &Path) -> PathBuf {
 }
 
 /// Sign an image with Solana and upload proof as OCI artifact
-pub async fn sign_image_with_oci(
+pub fn sign_image_with_oci(
     image_reference: &str,
     config: &SkelzConfig,
     username: &str,
     token: &str,
 ) -> Result<String> {
-    // Parse the canonical image reference
-    let reference = Reference::try_from(image_reference)
-        .context("Failed to parse image reference")?;
+    info!("Signing image with OCI: {}", image_reference);
     
     // Sign the image on Solana first
     let signature = sign_docker_image(image_reference, config)?;
@@ -331,73 +306,85 @@ pub async fn sign_image_with_oci(
     let payload_bytes = serde_json::to_vec(&payload_json)
         .context("Failed to serialize payload to JSON")?;
     
-    // Calculate digest of the payload
-    let mut hasher = Sha256::new();
-    hasher.update(&payload_bytes);
-    let payload_digest = format!("sha256:{:x}", hasher.finalize());
+    // Write payload to temporary file in current directory
+    let signature_file = std::path::PathBuf::from("skelz-signature.json");
+    std::fs::write(&signature_file, &payload_bytes)
+        .context("Failed to write signature file")?;
     
-    // Configure OCI client
-    let client_config = ClientConfig::default();
-    let client = Client::new(client_config);
-    
-    // Create authentication based on registry
-    let auth = RegistryAuth::Basic(username.to_string(), token.to_string());
-    
-    // Authenticate with the registry first
-    info!("Authenticating with registry...");
-    client.auth(&reference, &auth, oci_client::RegistryOperation::Push).await
-        .context("Failed to authenticate with registry")?;
-    
-    // Upload the blob to the registry
-    info!("Uploading proof blob to registry...");
-    client.push_blob(&reference, &payload_bytes, &payload_digest).await
-        .context("Failed to upload blob to registry")?;
-    
-    // Use Image Manifest for Docker Hub (creates a new image with annotations)
-    info!("Using Image Manifest for Docker Hub...");
-    
-    let mut annotations = std::collections::BTreeMap::new();
-    annotations.insert("org.opencontainers.artifact.type".to_string(), "application/vnd.skelz.proof.v1+json".to_string());
-    annotations.insert("org.opencontainers.artifact.created".to_string(), chrono::Utc::now().to_rfc3339());
-    annotations.insert("skelz.signature".to_string(), signature.clone());
-    annotations.insert("skelz.original-image".to_string(), image_reference.to_string());
-    annotations.insert("skelz.original-digest".to_string(), reference.digest().unwrap_or_default().to_string());
-    annotations.insert("skelz.tool".to_string(), "skelz-cli@v1.0.0".to_string());
-    
-    let image_manifest = oci_client::manifest::OciImageManifest {
-        schema_version: 2,
-        media_type: Some("application/vnd.oci.image.manifest.v1+json".to_string()),
-        artifact_type: None,
-        config: oci_client::manifest::OciDescriptor {
-            media_type: "application/vnd.skelz.proof.v1+json".to_string(),
-            digest: payload_digest.clone(),
-            size: payload_bytes.len() as i64,
-            urls: None,
-            annotations: None,
-        },
-        layers: vec![],
-        annotations: Some(annotations),
-        subject: None,
+    // Ensure image reference is for GHCR
+    let ghcr_reference = if image_reference.starts_with("ghcr.io/") {
+        image_reference.to_string()
+    } else {
+        // Extract repository and digest from the original reference
+        let parts: Vec<&str> = image_reference.split('/').collect();
+        if parts.len() >= 2 {
+            let repo_with_tag = parts[1..].join("/");
+            format!("ghcr.io/{}", repo_with_tag)
+        } else {
+            anyhow::bail!("Invalid image reference format: {}", image_reference);
+        }
     };
     
-    // Wrap in OciManifest enum
-    let artifact_manifest = oci_client::manifest::OciManifest::Image(image_manifest);
+    info!("Using GHCR reference: {}", ghcr_reference);
     
-    // Create a reference for the artifact manifest with digest suffix for easy identification
-    let digest_suffix = reference.digest().unwrap_or_default().replace("sha256:", "").chars().take(12).collect::<String>();
-    let artifact_reference_str = format!("{}:skelz-proof-{}", reference.repository(), digest_suffix);
-    let artifact_reference = Reference::try_from(artifact_reference_str.as_str())
-        .context("Failed to create artifact reference")?;
+    // Use oras attach to attach the signature to the image
+    let mut cmd = Command::new("oras");
+    cmd.arg("attach")
+        .arg("--artifact-type")
+        .arg("application/vnd.skelz.proof.v1+json")
+        .arg("--annotation")
+        .arg(format!("org.opencontainers.artifact.created={}", chrono::Utc::now().to_rfc3339()))
+        .arg("--annotation")
+        .arg(format!("skelz.signature={}", signature))
+        .arg("--annotation")
+        .arg(format!("skelz.original-image={}", image_reference))
+        .arg("--annotation")
+        .arg("skelz.tool=skelz-cli@v1.0.0")
+        .arg(&ghcr_reference)
+        .arg(&signature_file);
     
-    // Upload the artifact manifest
-    info!("Uploading image manifest to Docker Hub...");
-    client.push_manifest(&artifact_reference, &artifact_manifest).await
-        .context("Failed to upload artifact manifest")?;
+    // Set authentication
+    cmd.env("ORAS_USERNAME", username);
+    cmd.env("ORAS_PASSWORD", token);
     
-    info!("Image manifest uploaded successfully to Docker Hub");
-    info!("Artifact image created: {}", artifact_reference_str);
+    info!("Running oras attach command...");
+    let output = cmd.output()
+        .context("Failed to execute oras command")?;
     
-    info!(%signature, "artifact uploaded successfully");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!("oras attach failed:\nSTDOUT: {}\nSTDERR: {}", stdout, stderr);
+    }
+    
+    info!("Successfully attached signature to image: {}", ghcr_reference);
+    
+    // Discover and display attached artifacts
+    info!("Discovering attached artifacts...");
+    let mut discover_cmd = Command::new("oras");
+    discover_cmd.arg("discover")
+        .arg(&ghcr_reference);
+    
+    // Set authentication for discover command
+    discover_cmd.env("ORAS_USERNAME", username);
+    discover_cmd.env("ORAS_PASSWORD", token);
+    
+    let discover_output = discover_cmd.output()
+        .context("Failed to execute oras discover command")?;
+    
+    if discover_output.status.success() {
+        let discover_stdout = String::from_utf8_lossy(&discover_output.stdout);
+        info!("Attached artifacts:\n{}", discover_stdout);
+        println!("Attached artifacts:\n{}", discover_stdout);
+    } else {
+        let discover_stderr = String::from_utf8_lossy(&discover_output.stderr);
+        info!("Warning: Could not discover artifacts: {}", discover_stderr);
+    }
+    
+    // Clean up temporary file
+    let _ = std::fs::remove_file(&signature_file);
+    
+    info!(%signature, "signature attached successfully");
     Ok(signature)
 }
 
