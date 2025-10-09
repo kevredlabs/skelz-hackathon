@@ -12,6 +12,8 @@ use anchor_client::{
 };
 use anchor_lang::prelude::*;
 use std::rc::Rc;
+use sha2::{Sha256, Digest};
+
 
 // Déclarer le programme à partir de l'IDL
 declare_program!(skelz);
@@ -52,11 +54,17 @@ async fn main() -> anyhow::Result<()> {
 
     // Test 1: Créer une signature
     println!("\n📝 Test 1: Creating signature for image digest");
-    let digest = "sha256:abc123def456789";
+    let digest = "53847b1184f2aea29a72e072d39f0aef7ff6305c9672ae9803fcca40c188d23";
+
+    
+    // Hasher le digest pour la PDA 
+    let mut hasher = Sha256::new();
+    hasher.update(digest.as_bytes());
+    let digest_hash = hasher.finalize();
     
     // Dériver le PDA pour cette signature
     let (signature_pda, _bump) = Pubkey::find_program_address(
-        &[b"signature", digest.as_bytes()],
+        &[b"signature", &digest_hash[..]],
         &program.id(),
     );
     
@@ -124,9 +132,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Test 3: Créer une signature avec un digest différent
     println!("\n📝 Test 3: Creating signature with different digest");
-    let digest2 = "sha256:xyz789abc123";
+    let digest2 = "xyz789abc123";
+    
+    // Hasher le digest pour la PDA (même que le programme)
+    let mut hasher2 = Sha256::new();
+    hasher2.update(digest2.as_bytes());
+    let digest_hash2 = hasher2.finalize();
+    
     let (signature_pda2, _bump2) = Pubkey::find_program_address(
-        &[b"signature", digest2.as_bytes()],
+        &[b"signature", &digest_hash2[..]],
         &program.id(),
     );
     

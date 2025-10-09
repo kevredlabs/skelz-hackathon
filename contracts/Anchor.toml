@@ -13,7 +13,7 @@ skelz = "11111111111111111111111111111111"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [toolchain]

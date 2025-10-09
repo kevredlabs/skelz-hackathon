@@ -4,7 +4,7 @@ PROGRAM_DIR := programs/$(PROGRAM_NAME)/src
 LIB_RS := $(PROGRAM_DIR)/lib.rs
 # Output program keypair (generated on first build)
 KEYPAIR_PATH := target/deploy/$(PROGRAM_NAME)-keypair.json
-CLUSTER ?= localnet
+CLUSTER ?= devnet
 LEDGER_DIR := .solana-localnet-ledger
 
 ANCHOR_WALLET ?= $(HOME)/.config/solana/id.json

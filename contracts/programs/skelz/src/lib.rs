@@ -1,6 +1,7 @@
 #![allow(deprecated)]
 // Temporary: Anchor macro emits a deprecated realloc; safe to ignore here
 use anchor_lang::prelude::*;
+use sha2::{Sha256, Digest};
 
 declare_id!("4uw8DwTRdUMwGmbNrK5GZ5kgdVtco4aUaTGDnEUBrYKt");
 
@@ -25,8 +26,8 @@ pub struct WriteSignature<'info> {
     #[account(
     init,
     payer = signer,
-    space = 8 + 32 + 32,
-    seeds = [b"signature", digest.as_bytes()],
+    space = 8 + 100 + 32,
+    seeds = [b"signature", &Sha256::digest(digest.as_bytes())[..]],
     bump)]
     pub signature: Account<'info, Signature>,
     pub system_program: Program<'info, System>,

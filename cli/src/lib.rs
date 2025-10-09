@@ -8,14 +8,30 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use solana_client::rpc_client::RpcClient;
-use solana_sdk::hash::Hash;
-use solana_sdk::instruction::Instruction;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{read_keypair_file, Signer};
-use solana_sdk::transaction::Transaction;
 use thiserror::Error;
-use tracing::info;
+use tracing::{info, error};
+use anchor_client::{
+    solana_sdk::{
+        commitment_config::CommitmentConfig,
+        system_program,
+        pubkey::Pubkey as AnchorPubkey,
+        signature::Keypair,
+    },
+    Client, Cluster,
+};
+use anchor_lang::prelude::*;
+use std::rc::Rc;
+use sha2::{Sha256, Digest};
+
+// Declare the program using the IDL (exactly like in the test)
+declare_program!(skelz);
+use skelz::{accounts::Signature, client::accounts, client::args};
+
+// Define the program ID
+const SKELZ_PROGRAM_ID: &str = "4uw8DwTRdUMwGmbNrK5GZ5kgdVtco4aUaTGDnEUBrYKt";
+
 
 #[derive(Debug, Error)]
 pub enum SkelzError {
@@ -39,18 +55,6 @@ pub struct SkelzConfig {
     pub ghcr_token: Option<String>,
 }
 
-/// Structure for the Solana memo containing image signature information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImageSignatureMemo {
-    pub version: u32,
-    pub artifact: ImageArtifact,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImageArtifact {
-    pub kind: String,
-    pub digest: String,
-}
 
 /// Structure for the Solana proof payload to be uploaded as OCI artifact
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,36 +172,6 @@ pub fn load_config_with_overrides(
     Ok(cfg)
 }
 
-pub fn sign_memo(message: &str, cfg: &SkelzConfig) -> Result<String> {
-    let rpc_client = RpcClient::new(cfg.rpc_url.clone());
-    let payer = read_keypair_file(&cfg.keypair_path)
-        .map_err(|e| anyhow!("read keypair at {}: {}", cfg.keypair_path.display(), e))?;
-
-    let recent_blockhash: Hash = rpc_client
-        .get_latest_blockhash()
-        .context("fetch latest blockhash from RPC")?;
-
-    // Correct Memo program id (v2)
-    let memo_program_id = Pubkey::from_str("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr").unwrap();
-    let instruction = Instruction {
-        program_id: memo_program_id,
-        accounts: vec![],
-        data: message.as_bytes().to_vec(),
-    };
-
-    let transaction = Transaction::new_signed_with_payer(
-        &[instruction],
-        Some(&payer.pubkey()),
-        &[&payer],
-        recent_blockhash,
-    );
-
-    let signature = rpc_client
-        .send_and_confirm_transaction(&transaction)
-        .context("send and confirm transaction")?;
-    info!(%signature, "memo published");
-    Ok(signature.to_string())
-}
 
 /// Extract digest from canonical image reference
 pub fn extract_digest_from_reference(image_reference: &str) -> Result<String> {
@@ -210,33 +184,6 @@ pub fn extract_digest_from_reference(image_reference: &str) -> Result<String> {
     }
 }
 
-/// Sign a Docker image by publishing a memo on Solana
-pub fn sign_docker_image(image_reference: &str, cfg: &SkelzConfig) -> Result<String> {
-    // Extract the image digest from the canonical reference
-    let digest = extract_digest_from_reference(image_reference)?;
-    info!(%digest, "calculated image digest");
-    
-    // Create the signature memo
-    let memo = ImageSignatureMemo {
-        version: 1,
-        artifact: ImageArtifact {
-            kind: "oci-image".to_string(),
-            digest: digest.clone(),
-        },
-    };
-    
-    // Serialize to JSON
-    let memo_json = serde_json::to_string(&memo)
-        .context("Failed to serialize memo to JSON")?;
-    
-    info!(%memo_json, "publishing signature memo");
-    
-    // Publish the memo on Solana
-    let signature = sign_memo(&memo_json, cfg)?;
-    
-    info!(%signature, %image_reference, "image signed successfully");
-    Ok(signature)
-}
 
 pub fn get_config_value(cfg: &SkelzConfig, key: &str) -> Result<String> {
     match key {
@@ -307,6 +254,95 @@ pub fn expand_tilde(path: &Path) -> PathBuf {
     PathBuf::from(path)
 }
 
+/// Sign a Docker image using the Anchor program
+pub fn sign_docker_image_with_anchor(image_reference: &str, cfg: &SkelzConfig) -> Result<String> {
+    info!("Signing image with Anchor program: {}", image_reference);
+    
+    // Extract the image digest from the canonical reference
+    let digest = extract_digest_from_reference(image_reference)?;
+    info!(%digest, "calculated image digest");
+    
+    // Use the hardcoded program ID
+    let program_id = AnchorPubkey::from_str(SKELZ_PROGRAM_ID)
+        .context("Invalid program ID format")?;
+    
+    info!("Using program ID: {}", program_id);
+    
+    // Load the keypair
+    let payer = read_keypair_file(&cfg.keypair_path)
+        .map_err(|e| anyhow!("read keypair at {}: {}", cfg.keypair_path.display(), e))?;
+    
+    // Create the Anchor client
+    let cluster = match cfg.cluster.as_str() {
+        "mainnet" | "mainnet-beta" => Cluster::Mainnet,
+        "testnet" => Cluster::Testnet,
+        "localnet" | "local" => Cluster::Localnet,
+        _ => Cluster::Devnet,
+    };
+    
+    info!("Using cluster: {:?}", cluster);
+    info!("RPC URL: {}", cfg.rpc_url);
+    info!("Payer: {}", payer.pubkey());
+    
+    let provider = Client::new_with_options(
+        cluster,
+        Rc::new(payer),
+        CommitmentConfig::confirmed(),
+    );
+    
+    let program = provider.program(program_id)?;
+    
+    // Derive the PDA for this signature
+    // Hash the digest to create a shorter seed (32 bytes max)
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(digest.as_bytes());
+    let digest_hash = hasher.finalize();
+    
+    info!("Digest hash for PDA: {}", hex::encode(digest_hash));
+    
+    let (signature_pda, _bump) = AnchorPubkey::find_program_address(
+        &[b"signature", &digest_hash],
+        &program_id,
+    );
+    
+    info!("Signature PDA: {}", signature_pda);
+    
+    // Use Anchor's request builder exactly like in the test
+    info!("Sending transaction with accounts:");
+    info!("  signer: {}", program.payer());
+    info!("  pda: {}", signature_pda);
+    info!("  system_program: {}", system_program::ID);
+    info!("  digest: {}", digest);
+    
+    let result = program
+        .request()
+        .accounts(accounts::WriteSignature {
+            signer: program.payer(),
+            signature: signature_pda,
+            system_program: system_program::ID,
+        })
+        .args(args::WriteSignature {
+            digest: digest.clone(),
+        })
+        .send();
+    
+    let signature = match result {
+        Ok(sig) => sig,
+        Err(e) => {
+            error!("Transaction failed: {:?}", e);
+            if let anchor_client::ClientError::ProgramError(program_error) = &e {
+                error!("Program error: {:?}", program_error);
+            }
+            return Err(e.into());
+        }
+    };
+    
+    info!(%signature, %image_reference, "image signed successfully with Anchor program");
+    Ok(signature.to_string())
+}
+
+
+
 /// Sign an image with Solana and upload proof as OCI artifact
 pub fn sign_image_with_oci(
     image_reference: &str,
@@ -316,13 +352,13 @@ pub fn sign_image_with_oci(
 ) -> Result<String> {
     info!("Signing image with OCI: {}", image_reference);
     
-    // Sign the image on Solana first
-    let signature = sign_docker_image(image_reference, config)?;
-    info!(%signature, "image signed on Solana");
+    // Sign the image on Solana using the Anchor program
+    let signature = sign_docker_image_with_anchor(image_reference, config)?;
+    info!(%signature, "image signed on Solana with Anchor program");
     
     // Create the Solana proof payload
     let payload = SolanaProofPayload {
-        network: "solana-mainnet".to_string(),
+        network: "solana-devnet".to_string(),
         tx_hash: signature.clone(),
         tool: "skelz-cli@v1.0.0".to_string(),
     };
@@ -526,150 +562,70 @@ pub fn verify_oci_artifacts(
     Ok(())
 }
 
-/// Fetch a Solana transaction by signature and return signer pubkey and memo
-pub fn fetch_solana_transaction_with_memo(
-    tx_signature: &str,
-    rpc_url: &str,
-) -> Result<(String, ImageSignatureMemo)> {
-    info!("Fetching Solana transaction: {}", tx_signature);
-    
-    // Use tokio runtime for async operations
-    let rt = tokio::runtime::Runtime::new()
-        .context("Failed to create tokio runtime")?;
-    
-    rt.block_on(async {
-        let client = solana_client::nonblocking::rpc_client::RpcClient::new_with_commitment(
-            rpc_url.to_string(),
-            solana_sdk::commitment_config::CommitmentConfig::confirmed(),
-        );
-        
-        // Parse the signature
-        let signature = solana_sdk::signature::Signature::from_str(tx_signature)
-            .context("Invalid transaction signature format")?;
-        
-        // Configure the request
-        let config = solana_client::rpc_config::RpcTransactionConfig {
-            commitment: solana_sdk::commitment_config::CommitmentConfig::finalized().into(),
-            encoding: Some(solana_transaction_status::UiTransactionEncoding::Base64),
-            max_supported_transaction_version: Some(0),
-        };
-        
-        // Fetch the transaction
-        let tx = client
-            .get_transaction_with_config(&signature, config)
-            .await
-            .context("Failed to fetch transaction from Solana RPC")?;
-        
-        // Extract the signer and memo from the transaction
-        let (signer_pubkey, memo_data) = match &tx.transaction.transaction {
-            solana_transaction_status::EncodedTransaction::Binary(encoded_tx, _) => {
-                // Decode the base64 transaction
-                let tx_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded_tx)
-                    .context("Failed to decode transaction from base64")?;
-                
-                // Parse the transaction to get the signer and memo
-                let transaction: solana_sdk::transaction::VersionedTransaction = 
-                    bincode::deserialize(&tx_bytes)
-                        .context("Failed to deserialize transaction")?;
-                
-                // The first signature corresponds to the first account (fee payer/signer)
-                let signer = transaction.message.static_account_keys()[0];
-                let signer_pubkey = signer.to_string();
-                
-                // Extract memo data from the first instruction (memo instruction)
-                let memo_data = if let Some(instruction) = transaction.message.instructions().first() {
-                    // The memo instruction data is the memo content
-                    String::from_utf8(instruction.data.clone())
-                        .context("Memo data is not valid UTF-8")?
-                } else {
-                    anyhow::bail!("No instructions found in transaction");
-                };
-                
-                (signer_pubkey, memo_data)
-            }
-            _ => anyhow::bail!("Unexpected transaction encoding format"),
-        };
-        
-        println!("Signer pubkey: {}", signer_pubkey);
-        println!("Memo data: {}", memo_data);
-        
-        // Parse the memo to extract image information
-        let memo: ImageSignatureMemo = serde_json::from_str(&memo_data)
-            .context("Failed to parse memo as ImageSignatureMemo")?;
-        
-        println!("Parsed memo: {:#?}", memo);
-        
-        info!("Successfully fetched transaction from slot {}", tx.slot);
-        Ok((signer_pubkey, memo))
-    })
-}
 
-/// Verify that the transaction was signed by the expected signer
-pub fn verify_transaction_signer(
-    signer_pubkey: &str,
+/// Verify signature using PDA-based system with Anchor
+pub fn verify_signature(
+    program: &anchor_client::Program<Rc<Keypair>>,
+    digest: &str,
     expected_signer: &str,
 ) -> Result<()> {
-    info!("Verifying transaction signer: {}", expected_signer);
+    info!("Verifying signature for digest: {}", digest);
     
+    // Step 1: Calculate PDA with the same seed as the program
+    let mut hasher = Sha256::new();
+    hasher.update(digest.as_bytes());
+    let digest_hash = hasher.finalize();
+    
+    let (signature_pda, _bump) = Pubkey::find_program_address(
+        &[b"signature", &digest_hash[..]],
+        &program.id(),
+    );
+    
+    info!("Calculated PDA: {}", signature_pda);
+    
+    // Step 2: Check if the account exists on Solana using Anchor IDL
+    let signature_account: Signature = program.account::<Signature>(signature_pda)
+        .map_err(|e| anyhow!("Signature account not found: {}. This means the image was not signed or not exists.", e))?;
+    
+    // Step 3: Verify the account data matches expectations
+    if signature_account.digest != digest {
+        anyhow::bail!(
+            "Digest mismatch: expected {}, got {}",
+            digest,
+            signature_account.digest
+        );
+    }
+    
+    // Step 4: Verify the signer matches expected signer
     let expected_pubkey = Pubkey::from_str(expected_signer)
         .context("Invalid expected signer public key format")?;
     
-    let signer_pubkey = Pubkey::from_str(signer_pubkey)
-        .context("Invalid signer public key in transaction")?;
-    
-    if signer_pubkey != expected_pubkey {
+    if signature_account.signer != expected_pubkey {
         anyhow::bail!(
-            "Transaction signer mismatch: expected {}, got {}",
+            "Signer mismatch: expected {}, got {}",
             expected_pubkey,
-            signer_pubkey
+            signature_account.signer
         );
     }
     
-    info!("Transaction signer verification successful");
+    info!("✅ Signature verification successful!");
+    println!("✅ Signature verification successful!");
+    println!("   - Digest: {}", signature_account.digest);
+    println!("   - Signer: {}", signature_account.signer);
+    println!("   - PDA: {}", signature_pda);
+    
     Ok(())
 }
 
-/// Extract and verify the image digest from the Solana memo
-pub fn verify_image_digest(
-    memo: &ImageSignatureMemo,
-    expected_image_reference: &str,
-) -> Result<()> {
-    info!("Verifying image digest for: {}", expected_image_reference);
-    
-    // Extract expected digest from image reference
-    let expected_digest = extract_digest_from_reference(expected_image_reference)?;
-    info!("Expected digest: {}", expected_digest);
-    
-    // Verify the digest matches
-    if memo.artifact.digest != expected_digest {
-        anyhow::bail!(
-            "Image digest mismatch: expected {}, got {}",
-            expected_digest,
-            memo.artifact.digest
-        );
-    }
-    
-    // Verify the artifact kind
-    if memo.artifact.kind != "oci-image" {
-        anyhow::bail!(
-            "Invalid artifact kind: expected 'oci-image', got '{}'",
-            memo.artifact.kind
-        );
-    }
-    
-    info!("Image digest verification successful");
-    Ok(())
-}
-
-/// Complete verification function that checks both OCI artifacts and Solana transaction
+/// Complete verification function using PDA-based system
 pub fn verify_image_signature(
     image_reference: &str,
     expected_signer: &str,
     config: &SkelzConfig,
-    username: &str,
-    token: &str,
+    _username: &str,
+    _token: &str,
 ) -> Result<()> {
-    info!("Starting complete image signature verification for: {}", image_reference);
+    info!("Starting PDA-based image signature verification for: {}", image_reference);
     
     // Step 1: Validate image reference format
     if !image_reference.contains("@sha256:") {
@@ -680,27 +636,22 @@ pub fn verify_image_signature(
         anyhow::bail!("Only GitHub Container Registry is supported. Use format: ghcr.io/username/repo@sha256:abc123...");
     }
     
-    // Step 2: Discover OCI artifacts
-    let artifacts = discover_oci_artifacts(image_reference, username, token)?;
+    // Step 2: Extract digest from image reference
+    let digest = extract_digest_from_reference(image_reference)?;
+    info!("Extracted digest: {}", digest);
     
-    // Step 3: Get the latest Skelz artifact
-    let skelz_artifact = get_latest_skelz_artifact(&artifacts, image_reference)?;
+    // Step 3: Configure Anchor program client using config keypair
+    let payer = read_keypair_file(&config.keypair_path)
+        .map_err(|e| anyhow!("read keypair at {}: {}", config.keypair_path.display(), e))?;
+    let provider = Client::new_with_options(
+        Cluster::Devnet,
+        Rc::new(payer),
+        CommitmentConfig::confirmed(),
+    );
+    let program = provider.program(skelz::ID)?;
     
-    // Step 4: Extract transaction signature from annotations
-    let tx_signature = skelz_artifact.annotations
-        .get("skelz.signature")
-        .ok_or_else(|| anyhow!("No skelz.signature annotation found in artifact"))?;
-    
-    info!("Found transaction signature: {}", tx_signature);
-    
-    // Step 5: Fetch the Solana transaction and extract signer + memo
-    let (signer_pubkey, memo) = fetch_solana_transaction_with_memo(tx_signature, &config.rpc_url)?;
-    
-    // Step 6: Verify the transaction signer
-    verify_transaction_signer(&signer_pubkey, expected_signer)?;
-    
-    // Step 7: Verify the image digest
-    verify_image_digest(&memo, image_reference)?;
+    // Step 4: Verify signature using PDA with Anchor IDL
+    verify_signature(&program, &digest, expected_signer)?;
     
     info!("✅ Complete image signature verification successful!");
     println!("✅ Complete image signature verification successful!");
