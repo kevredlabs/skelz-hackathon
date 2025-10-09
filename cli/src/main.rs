@@ -218,7 +218,7 @@ fn main() -> Result<()> {
             // Resolve GHCR authentication credentials from config
             let (username, token) = resolve_ghcr_credentials(&config)?;
             
-            // Verify complete image signature (OCI + Solana)
+            // Verify complete image signature using PDA-based system
             verify_image_signature(&cmd.image_reference, &cmd.expected_signer, &config, &username, &token)?;
             
             Ok(())
