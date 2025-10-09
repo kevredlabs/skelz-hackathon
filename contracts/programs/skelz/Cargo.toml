@@ -11,8 +11,6 @@ crate-type = ["cdylib", "lib"]
 anchor-lang = "0.31.1"
 
 
-
-
 [features]
 # Required by Anchor CLI when building the IDL
 idl-build = ["anchor-lang/idl-build"]
