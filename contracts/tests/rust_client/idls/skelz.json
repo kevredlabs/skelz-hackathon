@@ -1,0 +1,99 @@
+{
+  "address": "4uw8DwTRdUMwGmbNrK5GZ5kgdVtco4aUaTGDnEUBrYKt",
+  "metadata": {
+    "name": "skelz",
+    "version": "0.1.0",
+    "spec": "0.1.0"
+  },
+  "instructions": [
+    {
+      "name": "write_signature",
+      "discriminator": [
+        59,
+        227,
+        6,
+        94,
+        166,
+        238,
+        211,
+        88
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "signature",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  105,
+                  103,
+                  110,
+                  97,
+                  116,
+                  117,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "digest"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "digest",
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Signature",
+      "discriminator": [
+        93,
+        29,
+        138,
+        101,
+        101,
+        212,
+        176,
+        92
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "Signature",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "digest",
+            "type": "string"
+          },
+          {
+            "name": "signer",
+            "type": "pubkey"
+          }
+        ]
+      }
+    }
+  ]
+}

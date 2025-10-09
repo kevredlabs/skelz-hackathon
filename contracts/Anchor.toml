@@ -1,6 +1,7 @@
 [features]
 seeds = false
 skip-lint = false
+resolution = true
 
 [programs.localnet]
 skelz = "11111111111111111111111111111111"
@@ -12,7 +13,7 @@ skelz = "11111111111111111111111111111111"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "devnet"
+cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [toolchain]

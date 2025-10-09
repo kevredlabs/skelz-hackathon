@@ -4,7 +4,7 @@ PROGRAM_DIR := programs/$(PROGRAM_NAME)/src
 LIB_RS := $(PROGRAM_DIR)/lib.rs
 # Output program keypair (generated on first build)
 KEYPAIR_PATH := target/deploy/$(PROGRAM_NAME)-keypair.json
-CLUSTER ?= devnet
+CLUSTER ?= localnet
 LEDGER_DIR := .solana-localnet-ledger
 
 ANCHOR_WALLET ?= $(HOME)/.config/solana/id.json
@@ -27,7 +27,7 @@ export ANCHOR_PROVIDER_URL=$(PROVIDER_URL)
 
 # === Commands ===
 
-.PHONY: build deploy force-deploy fix-id test all redeploy explorer \
+.PHONY: build deploy force-deploy fix-id test test-rust all redeploy explorer \
         localnet-up localnet-down reset-localnet airdrop airdrop-accounts accounts-status \
         localnet-genesis watch logs help
 
@@ -37,6 +37,10 @@ export ANCHOR_PROVIDER_URL=$(PROVIDER_URL)
 build:
 	@echo "🔨 Building the program $(PROGRAM_NAME)..."
 	anchor build
+	@echo "📋 Copying IDL to test directory..."
+	@mkdir -p tests/rust_client/idls
+	@cp target/idl/$(PROGRAM_NAME).json tests/rust_client/idls/$(PROGRAM_NAME).json
+	@echo "✅ IDL copied to tests/rust_client/idls/$(PROGRAM_NAME).json"
 
 ## Deploy with fallback if Anchor fails
 deploy: build
@@ -66,6 +70,11 @@ fix-id:
 test:
 	@echo "🧪 Running tests on $(CLUSTER) ($(PROVIDER_URL))..."
 	npx dotenv -e .env -- yarn test
+
+## Run Rust client tests
+test-rust: build
+	@echo "🦀 Running Rust client tests..."
+	@cd tests/rust_client && cargo run
 
 ## Full cycle: deploy + fix-id + test
 all: deploy fix-id test
