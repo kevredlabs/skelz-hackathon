@@ -767,7 +767,7 @@ mod tests {
     fn extract_digest_from_valid_reference() {
         let reference = "ghcr.io/username/repo@sha256:abc123def456";
         let digest = extract_digest_from_reference(reference).unwrap();
-        assert_eq!(digest, "abc123def456");
+        assert_eq!(digest, "sha256:abc123def456");
     }
 
     #[test]
