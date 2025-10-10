@@ -1,3 +1,54 @@
+//! # Skelz CLI Library
+//!
+//! A Rust library for decentralized container image registry operations on Solana blockchain.
+//! This library provides functionality to sign and verify Docker images using Solana signatures
+//! and upload proofs to OCI registries like GitHub Container Registry (GHCR).
+//!
+//! ## Features
+//!
+//! - **Image Signing**: Sign Docker images with Solana blockchain signatures
+//! - **Signature Verification**: Verify image signatures against Solana blockchain
+//! - **OCI Registry Integration**: Upload and retrieve signature proofs from GHCR
+//! - **Configuration Management**: Flexible configuration with environment variable overrides
+//! - **Multi-cluster Support**: Support for devnet, testnet, and mainnet-beta
+//!
+//! ## Quick Start
+//!
+//! ```rust,no_run
+//! use skelz::{SkelzConfig, sign_image_with_oci, verify_image_signature};
+//! use anyhow::Result;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     let config = SkelzConfig::default();
+//!     
+//!     // Sign an image
+//!     let signature = sign_image_with_oci(
+//!         "ghcr.io/username/repo@sha256:abc123...",
+//!         &config,
+//!         "github-username",
+//!         "github-token"
+//!     )?;
+//!     
+//!     println!("Image signed: {}", signature);
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Configuration
+//!
+//! The library supports configuration through:
+//! - Configuration files (TOML format)
+//! - Environment variables
+//! - Command-line arguments
+//!
+//! See [`SkelzConfig`] for available configuration options.
+//!
+//! ## Error Handling
+//!
+//! All functions return `Result<T, anyhow::Error>` for comprehensive error handling.
+//! See [`SkelzError`] for specific error types.
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -33,24 +84,38 @@ use skelz::{accounts::Signature, client::accounts, client::args};
 const SKELZ_PROGRAM_ID: &str = "4uw8DwTRdUMwGmbNrK5GZ5kgdVtco4aUaTGDnEUBrYKt";
 
 
+/// Errors that can occur during Skelz operations.
 #[derive(Debug, Error)]
 pub enum SkelzError {
+    /// Configuration file already exists at the specified path.
     #[error("config file exists: {0}")]
     ConfigExists(String),
+    /// Configuration file not found at the expected location.
     #[error("config not found: {0}")]
     ConfigNotFound(String),
+    /// Unknown configuration key provided.
     #[error("unknown config key: {0}")]
     UnknownConfigKey(String),
 }
 
+/// Configuration structure for Skelz operations.
+///
+/// This struct holds all configuration options for the Skelz CLI,
+/// including Solana network settings and GitHub Container Registry credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkelzConfig {
+    /// Solana cluster name (devnet, testnet, mainnet-beta, localnet).
     pub cluster: String,
+    /// Solana RPC endpoint URL.
     pub rpc_url: String,
+    /// Path to Solana keypair file.
     pub keypair_path: PathBuf,
+    /// Solana commitment level (processed, confirmed, finalized).
     pub commitment: String,
+    /// GitHub Container Registry username (optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ghcr_user: Option<String>,
+    /// GitHub Container Registry token (optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ghcr_token: Option<String>,
 }
@@ -661,9 +726,116 @@ pub fn verify_image_signature(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn default_rpc_for_devnet() {
         assert_eq!(default_cluster_rpc_url("devnet"), "https://api.devnet.solana.com");
+    }
+
+    #[test]
+    fn default_rpc_for_testnet() {
+        assert_eq!(default_cluster_rpc_url("testnet"), "https://api.testnet.solana.com");
+    }
+
+    #[test]
+    fn default_rpc_for_mainnet() {
+        assert_eq!(default_cluster_rpc_url("mainnet-beta"), "https://api.mainnet-beta.solana.com");
+    }
+
+    #[test]
+    fn default_rpc_for_localnet() {
+        assert_eq!(default_cluster_rpc_url("localnet"), "http://127.0.0.1:8899");
+    }
+
+    #[test]
+    fn default_rpc_for_unknown_cluster() {
+        assert_eq!(default_cluster_rpc_url("unknown"), "https://api.devnet.solana.com");
+    }
+
+    #[test]
+    fn skelz_config_default() {
+        let config = SkelzConfig::default();
+        assert_eq!(config.cluster, "devnet");
+        assert_eq!(config.rpc_url, "https://api.devnet.solana.com");
+        assert_eq!(config.commitment, "confirmed");
+        assert!(config.ghcr_user.is_none());
+        assert!(config.ghcr_token.is_none());
+    }
+
+    #[test]
+    fn extract_digest_from_valid_reference() {
+        let reference = "ghcr.io/username/repo@sha256:abc123def456";
+        let digest = extract_digest_from_reference(reference).unwrap();
+        assert_eq!(digest, "abc123def456");
+    }
+
+    #[test]
+    fn extract_digest_from_invalid_reference() {
+        let reference = "ghcr.io/username/repo:latest";
+        let result = extract_digest_from_reference(reference);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn expand_tilde_with_tilde() {
+        let path = PathBuf::from("~/test");
+        let expanded = expand_tilde(&path);
+        assert!(expanded.to_string_lossy().contains("test"));
+    }
+
+    #[test]
+    fn expand_tilde_without_tilde() {
+        let path = PathBuf::from("/absolute/path");
+        let expanded = expand_tilde(&path);
+        assert_eq!(expanded, path);
+    }
+
+    #[test]
+    fn get_config_value_valid_keys() {
+        let config = SkelzConfig::default();
+        
+        assert_eq!(get_config_value(&config, "cluster").unwrap(), "devnet");
+        assert_eq!(get_config_value(&config, "rpc_url").unwrap(), "https://api.devnet.solana.com");
+        assert_eq!(get_config_value(&config, "commitment").unwrap(), "confirmed");
+    }
+
+    #[test]
+    fn get_config_value_invalid_key() {
+        let config = SkelzConfig::default();
+        let result = get_config_value(&config, "invalid_key");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn set_config_value_valid_keys() {
+        let mut config = SkelzConfig::default();
+        
+        set_config_value(&mut config, "cluster", "testnet").unwrap();
+        assert_eq!(config.cluster, "testnet");
+        
+        set_config_value(&mut config, "commitment", "finalized").unwrap();
+        assert_eq!(config.commitment, "finalized");
+    }
+
+    #[test]
+    fn set_config_value_invalid_key() {
+        let mut config = SkelzConfig::default();
+        let result = set_config_value(&mut config, "invalid_key", "value");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn solana_proof_payload_serialization() {
+        let payload = SolanaProofPayload {
+            network: "devnet".to_string(),
+            tx_hash: "abc123".to_string(),
+            tool: "skelz".to_string(),
+        };
+        
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("devnet"));
+        assert!(json.contains("abc123"));
+        assert!(json.contains("skelz"));
     }
 }
